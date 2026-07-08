@@ -1,0 +1,8 @@
+# Dashboard F1 — versiones congeladas del entorno funcional (jul 2026)
+streamlit==1.51.0
+fastf1==3.8.3
+plotly==6.5.0
+pandas==2.3.3
+numpy==2.3.5
+scipy==1.16.3
+requests==2.32.5

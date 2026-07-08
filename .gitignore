@@ -1,0 +1,19 @@
+# Caché de FastF1 (gigas de píckles + sqlite — NUNCA versionar)
+cache/
+cache.nosync/
+
+# Python
+__pycache__/
+*.pyc
+.venv
+.venv.nosync/
+
+# macOS
+.DS_Store
+
+# Claude Code (local de esta máquina)
+.claude/settings.local.json
+.claude/worktrees/
+
+# Código legado (archivado localmente, no versionado)
+legacy/
