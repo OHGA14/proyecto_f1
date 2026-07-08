@@ -12,7 +12,7 @@ Dashboard de telemetría y estrategia de Fórmula 1 construido con **Streamlit +
 | **CARRERA** | Lap chart, gap al líder, estrategia de neumáticos (Gantt), degradación por stint, parrilla→meta, ritmo corregido por combustible |
 | **FÍSICA** | G-G plot, fuerza G longitudinal, despliegue de energía (ERS/clipping), fases de conducción |
 | **REPLAY** | Replay animado N pilotos con close-up sincronizado y dominancia por mini-sector |
-| **HISTÓRICO** | Comparación multi-GP desde base DuckDB local: ritmo puro por carrera, récords de speed trap (responde en milisegundos, sin cargar FastF1) |
+| **HISTÓRICO** | Análisis multi-GP desde base DuckDB local: campeonato acumulado por temporada, ritmo puro por carrera, head-to-head histórico entre 2 pilotos, récords de speed trap (responde en milisegundos, sin cargar FastF1) |
 
 ## Ejecutar
 
@@ -33,7 +33,14 @@ La primera carga de una sesión descarga los datos de FastF1 (~1–2 min) y los 
 .venv.nosync/bin/python ingest.py 2026 "British Grand Prix" "Race"   # una sesión concreta
 ```
 
-Crea/actualiza `data.nosync/f1.duckdb` (~1 s por sesión). La pestaña HISTÓRICO consulta esa base para análisis multi-GP instantáneos.
+Crea/actualiza `data.nosync/f1.duckdb` (~1 s por sesión). La pestaña HISTÓRICO consulta esa base para análisis multi-GP instantáneos. Además, **cada sesión que cargas en el dashboard se registra sola** en la base (auto-sincronización idempotente).
+
+### Tests
+
+```bash
+.venv.nosync/bin/pip install -r requirements-dev.txt   # una sola vez
+.venv.nosync/bin/python -m pytest tests/
+```
 
 ## Estructura
 

@@ -459,3 +459,61 @@ def build_historic_pace_chart(df, color_map, height=520):
         margin=dict(l=60, r=20, t=60, b=50), hovermode="x unified",
     )
     return fig
+
+
+def build_championship_chart(df, color_map, height=520):
+    """Puntos ACUMULADOS del campeonato por piloto a lo largo de la temporada.
+
+    df: columnas [label (GP corto), orden, driver, cum_points].
+    """
+    fig = go.Figure()
+    ultimo = df[df["orden"] == df["orden"].max()].set_index("driver")["cum_points"]
+    for drv in df["driver"].unique():
+        d = df[df["driver"] == drv].sort_values("orden")
+        fig.add_trace(go.Scatter(
+            x=d["label"], y=d["cum_points"], mode="lines+markers", name=drv,
+            line=dict(color=color_map.get(drv, "#9aa0aa"), width=2.4),
+            marker=dict(size=6),
+            hovertemplate=f"<b>{drv}</b> · %{{x}}<br>%{{y:.0f}} pts acumulados<extra></extra>",
+        ))
+        if drv in ultimo.index:
+            fig.add_annotation(x=d["label"].iloc[-1], y=float(ultimo[drv]),
+                               text=f" {drv}", showarrow=False, xanchor="left",
+                               font=dict(color=color_map.get(drv, "#9aa0aa"), size=11))
+    fig.update_layout(
+        template="plotly_dark", height=height,
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(14,17,23,1)",
+        font=dict(family="Roboto", color="#e6e6e6"),
+        yaxis=dict(title="PUNTOS ACUMULADOS", showgrid=True,
+                   gridcolor="rgba(255,255,255,0.07)", griddash="dot"),
+        xaxis=dict(title="", showgrid=False),
+        showlegend=False, margin=dict(l=60, r=60, t=30, b=60), hovermode="x unified",
+    )
+    return fig
+
+
+def build_h2h_history_chart(df, drv_a, drv_b, col_a, col_b, height=460):
+    """Head-to-head histórico: Δ de mejor vuelta (A − B) por GP.
+
+    Barra hacia ABAJO = A fue más rápido (convención delta del dashboard);
+    hacia arriba = B. Color de la barra = color del ganador de ese GP.
+    df: columnas [label, delta_s, orden].
+    """
+    d = df.sort_values("orden")
+    colores = [col_a if v < 0 else col_b for v in d["delta_s"]]
+    fig = go.Figure(go.Bar(
+        x=d["label"], y=d["delta_s"], marker_color=colores,
+        text=[f"{abs(v):.2f}s" for v in d["delta_s"]], textposition="outside",
+        hovertemplate="%{x}<br>Δ = %{y:+.3f}s (A − B)<extra></extra>",
+    ))
+    fig.add_hline(y=0, line_color="rgba(255,255,255,.35)", line_width=1)
+    fig.update_layout(
+        template="plotly_dark", height=height,
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(14,17,23,1)",
+        font=dict(family="Roboto", color="#e6e6e6"),
+        yaxis=dict(title=f"Δ MEJOR VUELTA (s) · abajo = {drv_a} más rápido",
+                   showgrid=True, gridcolor="rgba(255,255,255,0.07)", griddash="dot"),
+        xaxis=dict(title="", showgrid=False),
+        margin=dict(l=60, r=20, t=30, b=60), hovermode="x",
+    )
+    return fig

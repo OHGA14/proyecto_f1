@@ -20,3 +20,4 @@ legacy/
 
 # Base de datos derivada (regenerable con ingest.py)
 data.nosync/
+.pytest_cache/

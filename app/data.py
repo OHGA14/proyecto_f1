@@ -38,9 +38,21 @@ def load_session_data(year, gp, session):
 
         s.load(telemetry=True, weather=True, messages=True)
 
-        return s
+    except Exception:
+        return None
 
-    except: return None
+    # Auto-sincronización con la base histórica (DuckDB): cada sesión que se
+    # carga en el dashboard queda registrada sin pasos manuales. Idempotente
+    # (~1 s); si la base está ocupada o falla, el dashboard sigue normal.
+    try:
+        from f1core import db as _db
+        _con = _db.connect()
+        _db.ingest_session(_con, s)
+        _con.close()
+    except Exception:
+        pass
+
+    return s
 
 @st.cache_data(show_spinner=False)
 def get_lap_phase_stats(year, gp, session, driver, lap_mode, target_lap):

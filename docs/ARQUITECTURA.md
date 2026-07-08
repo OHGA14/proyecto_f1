@@ -53,8 +53,18 @@ cache.nosync/      Caché FastF1 (~GB; fuera de git y de iCloud)
 - **Fase 0 — Higiene** ✅ (tag `fase-0`): .gitignore, repo limpio, requirements, venv, README
 - **Fase 1 — Modularización** ✅ (tag `fase-1`): f1core/ + app/; main queda como orquestador
 - **Fase 1b — Vistas** ✅ (tag `fase-1b`): cada pestaña en `app/views/*.py`; main ~600 líneas
-- **Fase 2 — Capa de datos SQL** ✅ (tag `fase-2`): DuckDB en `data.nosync/f1.duckdb` (tablas `sessions`, `results`, `laps`) + `ingest.py` (CLI; `--cached` barre la caché FastF1 completa: 49 sesiones 2023→2026 en ~45 s) + pestaña **HISTÓRICO** que lee solo de la base (consultas multi-GP en milisegundos). `f1core/db.py`: `connect()`, `ingest_session()` idempotente, `query()`.
-  - *Siguiente (2b):* telemetría a Parquet por sesión; más vistas históricas (degradación por circuito, evolución de equipos)
+- **Fase 2 — Capa de datos SQL** ✅ (tags `fase-2`, `fase-2b`): DuckDB en `data.nosync/f1.duckdb` + `ingest.py` (CLI; `--cached` barre la caché FastF1: 49 sesiones 2023→2026 en ~45 s) + pestaña **HISTÓRICO** (solo lee la base; consultas multi-GP en milisegundos): campeonato acumulado por temporada, ritmo puro por GP, head-to-head histórico, récords de speed trap. **Auto-sincronización**: cada sesión cargada en el dashboard se ingesta sola (en `load_session_data`, idempotente, falla en silencio). **Tests**: `tests/test_db.py` (5 pruebas con sesión falsa, sin red) — correr con `.venv.nosync/bin/python -m pytest tests/`.
+  - *Ideas futuras:* telemetría a Parquet por sesión; degradación por circuito
+
+### Esquema de la base (data.nosync/f1.duckdb)
+
+| Tabla | Clave | Columnas principales |
+|---|---|---|
+| `sessions` | `session_id` = "año\|GP\|sesión" | year, round, gp, session, date, circuit, n_laps, n_drivers |
+| `results` | session_id + abbr | full_name, team, grid, position, points, status, q1_s/q2_s/q3_s |
+| `laps` | session_id + driver + lap | time_s, s1/s2/s3_s, compound, tyre_life, stint, speed_st/fl, is_pit_in/out, track_status, is_accurate |
+
+Todos los tiempos en SEGUNDOS (float). Re-ingerir una sesión la reemplaza (idempotente).
 - **Fase 3 — UI profesional**: FastAPI sirviendo los `go.Figure` como JSON (`fig.to_json()`) + frontend React/Next.js con `react-plotly.js`. Streamlit queda como laboratorio
 
 ## Si algo sale mal: cómo regresar
