@@ -27,7 +27,7 @@ La primera carga de una sesión descarga los datos de FastF1 (~1–2 min) y los 
 
 ## Estructura
 
-- `app_f12025.py` — orquestador Streamlit: sidebar, carga de contexto y cuerpos de las 6 pestañas
+- `app_f12025.py` — orquestador Streamlit (~600 líneas): sidebar, contexto y despacho a las vistas
 - `f1core/` — lógica pura, **sin Streamlit** (reutilizable desde cualquier UI o script):
   - `config.py` pilotos/equipos/colores/constantes · `colors.py` colores por selección
   - `timeutils.py` tiempos y sectores · `laps.py` selección/filtrado de vueltas
@@ -35,6 +35,7 @@ La primera carga de una sesión descarga los datos de FastF1 (~1–2 min) y los 
   - `charts.py` constructores de figuras Plotly
 - `app/` — capa de UI Streamlit:
   - `theme.py` CSS global · `components.py` tarjetas/tablas/guías · `data.py` caché de datos
+  - `views/` una vista por pestaña: `panorama` `telemetria` `vs_vueltas` `carrera` `fisica` `replay`
 - `requirements.txt` — versiones congeladas
 - `legacy/` — versiones anteriores (no versionado)
 - `colab/` — cuadernos de exploración
