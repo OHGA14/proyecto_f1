@@ -430,3 +430,32 @@ def build_gp_tempo_chart(laps_vip_df, drivers, show_outliers=True, height=560):
         hovermode="closest"
     )
     return fig
+
+
+def build_historic_pace_chart(df, color_map, height=520):
+    """Evolución multi-GP: % sobre la mejor vuelta de cada carrera (0% = fue el más rápido).
+
+    df: columnas [label (GP corto), driver, pct]. La métrica es comparable entre
+    circuitos porque normaliza contra la mejor vuelta de cada GP.
+    """
+    fig = go.Figure()
+    for drv in df["driver"].unique():
+        d = df[df["driver"] == drv].sort_values("orden")
+        fig.add_trace(go.Scatter(
+            x=d["label"], y=d["pct"], mode="lines+markers", name=drv,
+            line=dict(color=color_map.get(drv, "#FFFFFF"), width=2.4, shape="spline"),
+            marker=dict(size=7),
+            hovertemplate=f"<b>{drv}</b> · %{{x}}<br>+%{{y:.2f}}% sobre la mejor vuelta<extra></extra>",
+        ))
+    fig.update_layout(
+        template="plotly_dark", height=height,
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(14,17,23,1)",
+        font=dict(family="Roboto", color="#e6e6e6"),
+        yaxis=dict(title="% SOBRE LA MEJOR VUELTA DEL GP", ticksuffix="%",
+                   showgrid=True, gridcolor="rgba(255,255,255,0.07)", griddash="dot",
+                   zeroline=True, zerolinecolor="rgba(255,45,45,.55)", zerolinewidth=2),
+        xaxis=dict(title="", showgrid=False),
+        legend=dict(orientation="h", y=1.12, x=0.5, xanchor="center"),
+        margin=dict(l=60, r=20, t=60, b=50), hovermode="x unified",
+    )
+    return fig

@@ -25,7 +25,10 @@ app/               Capa de UI Streamlit
   views/           Una vista por pestaña con render(ctx); ctx = globals() del main.
                    Las vistas leen el contexto con ctx.get("nombre") y NO comparten
                    variables entre sí (verificado: cero filtraciones entre pestañas)
+f1core/db.py       Capa DuckDB: esquema, ingesta idempotente, consultas
+ingest.py          CLI de ingesta FastF1 → DuckDB (una sesión o --cached)
 docs/              Este documento
+data.nosync/       f1.duckdb (derivada, regenerable; fuera de git/iCloud)
 legacy/            Versiones viejas (no versionado)
 cache.nosync/      Caché FastF1 (~GB; fuera de git y de iCloud)
 .venv.nosync/      Entorno virtual (fuera de iCloud)
@@ -50,7 +53,8 @@ cache.nosync/      Caché FastF1 (~GB; fuera de git y de iCloud)
 - **Fase 0 — Higiene** ✅ (tag `fase-0`): .gitignore, repo limpio, requirements, venv, README
 - **Fase 1 — Modularización** ✅ (tag `fase-1`): f1core/ + app/; main queda como orquestador
 - **Fase 1b — Vistas** ✅ (tag `fase-1b`): cada pestaña en `app/views/*.py`; main ~600 líneas
-- **Fase 2 — Capa de datos SQL**: DuckDB (tablas `sessions`, `results`, `laps`, `stints`, `lap_features`) + Parquet para telemetría + script `ingest.py`. Objetivo: arranque <1 s (hoy ~40 s) y análisis multi-GP/multi-temporada
+- **Fase 2 — Capa de datos SQL** ✅ (tag `fase-2`): DuckDB en `data.nosync/f1.duckdb` (tablas `sessions`, `results`, `laps`) + `ingest.py` (CLI; `--cached` barre la caché FastF1 completa: 49 sesiones 2023→2026 en ~45 s) + pestaña **HISTÓRICO** que lee solo de la base (consultas multi-GP en milisegundos). `f1core/db.py`: `connect()`, `ingest_session()` idempotente, `query()`.
+  - *Siguiente (2b):* telemetría a Parquet por sesión; más vistas históricas (degradación por circuito, evolución de equipos)
 - **Fase 3 — UI profesional**: FastAPI sirviendo los `go.Figure` como JSON (`fig.to_json()`) + frontend React/Next.js con `react-plotly.js`. Streamlit queda como laboratorio
 
 ## Si algo sale mal: cómo regresar

@@ -65,7 +65,8 @@ from app.data import (get_cached_telemetry, load_session_data, get_lap_phase_sta
                       get_schedule, get_event_sessions, get_championship_points)
 from app.views import (panorama as view_panorama, telemetria as view_telemetria,
                        vs_vueltas as view_vs_vueltas, carrera as view_carrera,
-                       fisica as view_fisica, replay as view_replay)
+                       fisica as view_fisica, replay as view_replay,
+                       historico as view_historico)
 
 
 # ==============================================================================
@@ -613,7 +614,7 @@ for i, d in enumerate(selected_abbr):
 
 # --- FIN DEL BLOQUE A PEGAR ---
 
-tabs = st.tabs(["PANORAMA", "TELEMETRÍA", "VS VUELTAS", "CARRERA", "FÍSICA", "REPLAY"])
+tabs = st.tabs(["PANORAMA", "TELEMETRÍA", "VS VUELTAS", "CARRERA", "FÍSICA", "REPLAY", "HISTÓRICO"])
 
 # --- TAB 1: PANORAMA ---
 
@@ -634,4 +635,7 @@ with tabs[4]:
 
 with tabs[5]:
     view_replay.render(globals())
+
+with tabs[6]:
+    view_historico.render(globals())
 
