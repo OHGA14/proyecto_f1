@@ -30,6 +30,8 @@ _DDL = [
         speed_st DOUBLE, speed_fl DOUBLE,
         is_pit_in BOOLEAN, is_pit_out BOOLEAN,
         track_status TEXT, is_accurate BOOLEAN)""",
+    # migraciones sobre bases existentes (idempotentes)
+    "ALTER TABLE laps ADD COLUMN IF NOT EXISTS position DOUBLE",
 ]
 
 
@@ -69,7 +71,7 @@ def ingest_session(con, ses):
     laps = ses.laps.copy()
     for col in ("Team", "Compound", "TyreLife", "Stint", "SpeedST", "SpeedFL",
                 "TrackStatus", "IsAccurate", "PitInTime", "PitOutTime",
-                "Sector1Time", "Sector2Time", "Sector3Time"):
+                "Sector1Time", "Sector2Time", "Sector3Time", "Position"):
         if col not in laps.columns:
             laps[col] = None
     df_laps = pd.DataFrame({
@@ -90,6 +92,8 @@ def ingest_session(con, ses):
         "is_pit_out": laps["PitOutTime"].notna(),
         "track_status": laps["TrackStatus"].astype(str),
         "is_accurate": laps["IsAccurate"].fillna(False).astype(bool),
+        # va al FINAL: la columna se añadió por ALTER y el INSERT usa SELECT *
+        "position": pd.to_numeric(laps["Position"], errors="coerce"),
     })
 
     # --- results ------------------------------------------------------------

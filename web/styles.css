@@ -105,7 +105,7 @@ body {
 
 /* ─────────────────────────────────────── layout */
 .view {
-  width: min(1240px, 100% - 48px);
+  width: min(1800px, 100% - 64px);
   margin: 26px auto; flex: 1;
   animation: fadeup .4s cubic-bezier(.2, .7, .3, 1) both;
 }
@@ -230,6 +230,8 @@ th.num { text-align: right; }
 
 .ptsbar { position: relative; background: rgba(255, 255, 255, .06); border-radius: 4px; height: 8px; min-width: 90px; }
 .ptsbar i { position: absolute; inset: 0 auto 0 0; border-radius: 4px; background: var(--cc); }
+
+.sector-best { color: #C77DFF; font-weight: 800; }
 
 .delta-pos { font-weight: 700; }
 .delta-pos.up { color: #2ecc71; }

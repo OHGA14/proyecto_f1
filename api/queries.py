@@ -240,6 +240,79 @@ def session_detail(sid):
                       "color": colores.get(r["driver"], "#9aa0aa")}
                      for _, r in vmax.iterrows()]
 
+        # lap chart: posición real vuelta a vuelta
+        posdf = db.query(con, """
+            SELECT driver, lap, position FROM laps
+            WHERE session_id=? AND position IS NOT NULL
+            ORDER BY driver, lap""", [sid])
+        laps_chart = [{"code": d, "color": colores.get(d, "#9aa0aa"),
+                       "laps": g["lap"].tolist(),
+                       "pos": g["position"].astype(int).tolist()}
+                      for d, g in posdf.groupby("driver") if d in colores]
+
+        # gap al líder por vuelta (tiempo acumulado vs el mejor acumulado)
+        alldf = db.query(con, """
+            SELECT driver, lap, time_s FROM laps
+            WHERE session_id=? AND time_s IS NOT NULL ORDER BY lap""", [sid])
+        gaps = []
+        if not alldf.empty:
+            piv = alldf.pivot_table(index="lap", columns="driver",
+                                    values="time_s", aggfunc="first")
+            cum = piv.cumsum()
+            lider = cum.min(axis=1)
+            gapdf = cum.sub(lider, axis=0)
+            for d in gapdf.columns:
+                if d not in colores:
+                    continue
+                serie = gapdf[d].dropna()
+                gaps.append({"code": d, "color": colores.get(d, "#9aa0aa"),
+                             "laps": serie.index.astype(int).tolist(),
+                             "gap": serie.round(2).tolist()})
+
+        # vueltas bajo SC/VSC (para sombrear): status contiene 4 (SC) / 6-7 (VSC)
+        scdf = db.query(con, """
+            SELECT DISTINCT lap FROM laps
+            WHERE session_id=? AND (track_status LIKE '%4%' OR
+                  track_status LIKE '%6%' OR track_status LIKE '%7%')
+            ORDER BY lap""", [sid])
+        sc_ranges, run = [], []
+        for lp in scdf["lap"].astype(int).tolist():
+            if run and lp == run[-1] + 1:
+                run.append(lp)
+            else:
+                if run:
+                    sc_ranges.append([run[0], run[-1]])
+                run = [lp]
+        if run:
+            sc_ranges.append([run[0], run[-1]])
+
+        # mejores sectores + vuelta ideal
+        secdf = db.query(con, """
+            SELECT driver, MIN(s1_s) s1, MIN(s2_s) s2, MIN(s3_s) s3
+            FROM laps WHERE session_id=? GROUP BY 1
+            HAVING s1 IS NOT NULL AND s2 IS NOT NULL AND s3 IS NOT NULL""", [sid])
+        sectors = None
+        if not secdf.empty:
+            best_s = {k: float(secdf[k].min()) for k in ("s1", "s2", "s3")}
+            best_who = {k: secdf.loc[secdf[k].idxmin(), "driver"] for k in ("s1", "s2", "s3")}
+            rows = []
+            orden_sec = [r["code"] for r in results if r["code"] in set(secdf["driver"])]
+            secix = secdf.set_index("driver")
+            for code in orden_sec[:12]:
+                r = secix.loc[code]
+                ideal = float(r["s1"] + r["s2"] + r["s3"])
+                rows.append({"code": code, "color": colores.get(code, "#9aa0aa"),
+                             "s1": round(float(r["s1"]), 3), "s2": round(float(r["s2"]), 3),
+                             "s3": round(float(r["s3"]), 3), "ideal": fmt_lap(ideal),
+                             "best": [k for k in ("s1", "s2", "s3")
+                                      if float(r[k]) == best_s[k]]})
+            ideal_total = sum(best_s.values())
+            sectors = {"rows": rows,
+                       "session_ideal": {"label": fmt_lap(ideal_total),
+                                         "detail": " · ".join(
+                                             f"{k.upper()} {best_who[k]} {best_s[k]:.3f}"
+                                             for k in ("s1", "s2", "s3"))}}
+
         # resúmenes calculados (marca de la casa)
         summaries = {}
         if results:
@@ -261,12 +334,34 @@ def session_detail(sid):
             if subida and subida["delta_pos"] > 0:
                 summaries["results"] = (f"Mayor remontada: {subida['code']} "
                                         f"(+{subida['delta_pos']} posiciones desde P{subida['grid']}).")
+            if laps_chart:
+                cambios = {lc["code"]: (lc["pos"][0] - lc["pos"][-1])
+                           for lc in laps_chart if lc["pos"]}
+                if cambios:
+                    top_g = max(cambios, key=cambios.get)
+                    summaries["lapchart"] = (
+                        f"{top_g} fue quien más posiciones ganó en pista "
+                        f"({cambios[top_g]:+d}). "
+                        + (f"Hubo SC/VSC en {len(sc_ranges)} tramo(s) (bandas grises)."
+                           if sc_ranges else "Carrera sin coche de seguridad."))
+            if gaps:
+                fin = sorted(((g["code"], g["gap"][-1]) for g in gaps if g["gap"]),
+                             key=lambda x: x[1])
+                if len(fin) > 1:
+                    summaries["gaps"] = (f"Gap final del 2º ({fin[1][0]}): "
+                                         f"{fin[1][1]:.1f}s. Las caídas bruscas de "
+                                         f"todas las líneas = pit stops o SC.")
+            if sectors:
+                summaries["sectors"] = (f"Vuelta ideal de la sesión: "
+                                        f"{sectors['session_ideal']['label']} "
+                                        f"({sectors['session_ideal']['detail']}).")
         return {
             "info": {"sid": sid, "year": int(info["year"]), "gp": info["gp"],
                      "session": info["session"], "date": str(info["date"])[:10],
                      "n_laps": int(info["n_laps"]), "circuit": info["circuit"]},
             "results": results, "pace": pace, "strategy": strategy,
-            "speedtrap": speedtrap, "summaries": summaries,
+            "speedtrap": speedtrap, "laps_chart": laps_chart, "gaps": gaps,
+            "sc_ranges": sc_ranges, "sectors": sectors, "summaries": summaries,
         }
     finally:
         con.close()

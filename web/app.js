@@ -236,6 +236,82 @@ async function viewCarrera() {
              categoryarray: [...order].reverse(), gridcolor: "rgba(0,0,0,0)", tickfont: { size: 10 } },
   }), PLOTLY_CFG);
 
+  // bandas de SC/VSC compartidas por lap chart y gap
+  const scShapes = (d.sc_ranges || []).map(([l0, l1]) => ({
+    type: "rect", xref: "x", x0: l0 - 0.5, x1: l1 + 0.5, yref: "paper", y0: 0, y1: 1,
+    fillcolor: "rgba(255,255,255,.07)", line: { width: 0 }, layer: "below",
+  }));
+
+  // LAP CHART: posición vuelta a vuelta
+  if (d.laps_chart && d.laps_chart.length) {
+    const cLap = chartCard({
+      title: "Lap chart · posición vuelta a vuelta", sub: "bandas grises = SC/VSC",
+      summary: d.summaries.lapchart || "",
+      tips: ["<b>¿Una línea cae de golpe varias posiciones?</b> → pit stop; mira si las recupera (estrategia buena) o no.",
+             "<b>¿Cruces constantes entre dos líneas?</b> → batalla en pista real, vuelta a vuelta.",
+             "<b>¿Saltos durante una banda gris?</b> → posiciones ganadas/perdidas parando bajo coche de seguridad (parada 'gratis')."],
+    });
+    $view.appendChild(cLap.card);
+    Plotly.newPlot(cLap.plot, d.laps_chart.map((x) => ({
+      type: "scatter", mode: "lines", name: x.code, x: x.laps, y: x.pos,
+      line: { color: x.color, width: 1.8 },
+      hovertemplate: `<b>${x.code}</b> · V%{x} · P%{y}<extra></extra>`,
+    })), baseLayout({
+      height: 620, shapes: scShapes,
+      margin: { l: 46, r: 14, t: 14, b: 44 },
+      xaxis: { ...baseLayout().xaxis, title: { text: "VUELTA", font: { size: 10 } } },
+      yaxis: { ...baseLayout().yaxis, title: { text: "POSICIÓN", font: { size: 10 } },
+               autorange: "reversed", dtick: 2 },
+      legend: { orientation: "h", y: -0.1, font: { size: 10.5 } },
+    }), PLOTLY_CFG);
+    $view.appendChild(el(`<div style="height:18px"></div>`));
+  }
+
+  // GAP AL LÍDER
+  if (d.gaps && d.gaps.length) {
+    const flat = d.gaps.flatMap((g) => g.gap).sort((a, b) => a - b);
+    const cap = flat[Math.floor(flat.length * 0.93)] || 60;
+    const cGap = chartCard({
+      title: "Gap al líder", sub: "segundos detrás del primero, vuelta a vuelta",
+      summary: d.summaries.gaps || "",
+      tips: ["<b>¿Línea plana?</b> → mantiene el ritmo del líder; si sube, lo está perdiendo.",
+             "<b>¿Todas las líneas se comprimen de golpe?</b> → coche de seguridad: el pelotón se reagrupa.",
+             "<b>¿Escalón hacia arriba de ~20s?</b> → pit stop de ese piloto."],
+    });
+    $view.appendChild(cGap.card);
+    Plotly.newPlot(cGap.plot, d.gaps.map((x) => ({
+      type: "scatter", mode: "lines", name: x.code, x: x.laps, y: x.gap,
+      line: { color: x.color, width: 1.8 },
+      hovertemplate: `<b>${x.code}</b> · V%{x}<br>+%{y:.1f}s del líder<extra></extra>`,
+    })), baseLayout({
+      height: 560, shapes: scShapes,
+      margin: { l: 52, r: 14, t: 14, b: 44 },
+      xaxis: { ...baseLayout().xaxis, title: { text: "VUELTA", font: { size: 10 } } },
+      yaxis: { ...baseLayout().yaxis, title: { text: "SEGUNDOS TRAS EL LÍDER", font: { size: 10 } },
+               range: [cap, -2] },
+      legend: { orientation: "h", y: -0.1, font: { size: 10.5 } },
+    }), PLOTLY_CFG);
+    $view.appendChild(el(`<div style="height:18px"></div>`));
+  }
+
+  // MEJORES SECTORES + VUELTA IDEAL
+  if (d.sectors && d.sectors.rows.length) {
+    $view.appendChild(el(`<div class="section-title">Mejores sectores · vuelta ideal
+      <small> · ${d.summaries.sectors || ""}</small></div>`));
+    const fmtS = (row, k) => `<td class="num ${row.best.includes(k) ? "sector-best" : ""}">${row[k].toFixed(3)}</td>`;
+    const secRows = d.sectors.rows.map((r) => `<tr>
+      <td>${drvChip(r.code, r.color)}</td>
+      ${fmtS(r, "s1")}${fmtS(r, "s2")}${fmtS(r, "s3")}
+      <td class="num"><b>${r.ideal}</b></td></tr>`).join("");
+    $view.appendChild(el(`<div class="card table-wrap" style="margin-bottom:18px"><table>
+      <thead><tr><th>Piloto</th><th class="num">S1</th><th class="num">S2</th>
+      <th class="num">S3</th><th class="num">Vuelta ideal</th></tr></thead>
+      <tbody>${secRows}</tbody></table>
+      <div class="chart-summary" style="margin:10px 0 4px">En <span class="sector-best">morado</span>,
+      el mejor sector de todo el campo. La vuelta ideal junta los 3 mejores sectores de cada piloto:
+      si es mucho más rápida que su vuelta real, dejó tiempo en la mesa.</div></div>`));
+  }
+
   // tabla de resultados
   $view.appendChild(el(`<div class="section-title">Resultados
     ${d.summaries.results ? `<small> · ${d.summaries.results}</small>` : ""}</div>`));
@@ -471,7 +547,7 @@ async function renderAnalysis(zone) {
     line: { color: x.color, width: 5 },
   }));
   Plotly.newPlot(cMap.plot, [...segTraces, ...legendTraces], baseLayout({
-    height: 430, margin: { l: 10, r: 10, t: 10, b: 10 },
+    height: 560, margin: { l: 10, r: 10, t: 10, b: 10 },
     xaxis: { visible: false }, yaxis: { visible: false, scaleanchor: "x" },
     legend: { orientation: "h", y: -0.02, x: 0.5, xanchor: "center" },
     annotations: d.corners.map((c) => ({
@@ -492,7 +568,7 @@ async function renderAnalysis(zone) {
     marker: { color: x.color, size: 3.5, opacity: 0.45 },
     hovertemplate: `<b>${x.code}</b><br>G lat: %{x:.2f} · G long: %{y:.2f}<extra></extra>`,
   })), baseLayout({
-    height: 430, margin: { l: 52, r: 14, t: 12, b: 46 },
+    height: 560, margin: { l: 52, r: 14, t: 12, b: 46 },
     xaxis: { ...baseLayout().xaxis, title: { text: "G LATERAL", font: { size: 10 } },
              showgrid: true, gridcolor: "rgba(255,255,255,.06)", griddash: "dot" },
     yaxis: { ...baseLayout().yaxis, title: { text: "G LONGITUDINAL", font: { size: 10 } } },
@@ -512,7 +588,7 @@ async function renderAnalysis(zone) {
     line: { color: x.color, width: 1.9 },
     hovertemplate: `<b>${x.code}</b> · %{y:.0f} km/h<extra></extra>`,
   })), baseLayout({
-    height: 400, hovermode: "x unified", shapes: sectorShapes,
+    height: 580, hovermode: "x unified", shapes: sectorShapes,
     margin: { l: 56, r: 14, t: 14, b: 48 },
     xaxis: { ...baseLayout().xaxis, ...cornerAxis },
     yaxis: { ...baseLayout().yaxis, title: { text: "KM/H", font: { size: 10 } } },
@@ -536,7 +612,7 @@ async function renderAnalysis(zone) {
       line: { color: x.color, width: 2 },
       hovertemplate: `<b>${x.code}</b> · Δ %{y:+.3f}s<extra></extra>`,
     })), baseLayout({
-      height: 340, hovermode: "x unified", shapes: sectorShapes,
+      height: 480, hovermode: "x unified", shapes: sectorShapes,
       margin: { l: 56, r: 14, t: 14, b: 48 },
       xaxis: { ...baseLayout().xaxis, ...cornerAxis },
       yaxis: { ...baseLayout().yaxis, title: { text: `SEGUNDOS VS ${d.ref}`, font: { size: 10 } },
@@ -546,22 +622,21 @@ async function renderAnalysis(zone) {
     zone.appendChild(el(`<div style="height:18px"></div>`));
   }
 
-  // fila: acelerador + freno
-  const row2 = el(`<div class="grid cols-2" style="margin-bottom:18px"></div>`);
-  zone.appendChild(row2);
+  // canales a ANCHO COMPLETO (aquí se ven las diferencias finas)
   const mkChannel = (title, key, ytitle, tips) => {
-    const c = chartCard({ title, sub: "vs distancia", tips });
-    row2.appendChild(c.card);
+    const c = chartCard({ title, sub: "vs distancia · " + lapLabels, tips });
+    zone.appendChild(c.card);
+    zone.appendChild(el(`<div style="height:18px"></div>`));
     Plotly.newPlot(c.plot, d.drivers.map((x) => ({
       type: "scatter", mode: "lines", name: x.code, x: x.d, y: x[key],
       line: { color: x.color, width: 1.6 },
       hovertemplate: `<b>${x.code}</b> · %{y:.0f}${key === "gear" ? "ª" : "%"}<extra></extra>`,
     })), baseLayout({
-      height: 300, hovermode: "x unified",
-      margin: { l: 46, r: 12, t: 12, b: 44 },
+      height: 420, hovermode: "x unified", shapes: sectorShapes,
+      margin: { l: 50, r: 12, t: 12, b: 44 },
       xaxis: { ...baseLayout().xaxis, ...cornerAxis },
       yaxis: { ...baseLayout().yaxis, title: { text: ytitle, font: { size: 10 } } },
-      legend: { orientation: "h", y: 1.12, x: 1, xanchor: "right" },
+      legend: { orientation: "h", y: 1.08, x: 1, xanchor: "right" },
     }), PLOTLY_CFG);
   };
   mkChannel("Acelerador", "throttle", "% GAS",
@@ -570,24 +645,23 @@ async function renderAnalysis(zone) {
     ["<b>¿Su frenada empieza más tarde (más a la derecha)?</b> → frena más profundo: típico punto de adelantamiento.",
      "<b>¿Dos picos seguidos?</b> → soltó y volvió a frenar (corrección o chicane)."]);
 
-  // fila: marchas + fases
-  const row3 = el(`<div class="grid cols-2"></div>`);
-  zone.appendChild(row3);
+  // marchas y fases a ancho completo
   const cGear = chartCard({
     title: "Marchas", sub: "vs distancia",
     tips: ["<b>¿Cambia una marcha menos en la misma curva?</b> → relación más larga o toma la curva con más velocidad."],
   });
-  row3.appendChild(cGear.card);
+  zone.appendChild(cGear.card);
+  zone.appendChild(el(`<div style="height:18px"></div>`));
   Plotly.newPlot(cGear.plot, d.drivers.map((x) => ({
     type: "scatter", mode: "lines", name: x.code, x: x.d, y: x.gear,
     line: { color: x.color, width: 1.6, shape: "hv" },
     hovertemplate: `<b>${x.code}</b> · %{y}ª<extra></extra>`,
   })), baseLayout({
-    height: 300, hovermode: "x unified",
-    margin: { l: 46, r: 12, t: 12, b: 44 },
+    height: 400, hovermode: "x unified", shapes: sectorShapes,
+    margin: { l: 50, r: 12, t: 12, b: 44 },
     xaxis: { ...baseLayout().xaxis, ...cornerAxis },
     yaxis: { ...baseLayout().yaxis, title: { text: "MARCHA", font: { size: 10 } }, dtick: 1 },
-    legend: { orientation: "h", y: 1.12, x: 1, xanchor: "right" },
+    legend: { orientation: "h", y: 1.08, x: 1, xanchor: "right" },
   }), PLOTLY_CFG);
 
   const cPh = chartCard({
@@ -596,7 +670,7 @@ async function renderAnalysis(zone) {
     tips: ["<b>¿Más % a fondo?</b> → o el coche permite pisar antes, o el circuito se lo pide y el motor manda.",
            "<b>¿Más % en curva que el rival?</b> → pasa más tiempo gestionando el paso por curva: ahí se decide su vuelta."],
   });
-  row3.appendChild(cPh.card);
+  zone.appendChild(cPh.card);
   const phSeries = [
     { key: "fondo", name: "A fondo", color: "#2ECC71" },
     { key: "frenada", name: "Frenada", color: "#FF5252" },
