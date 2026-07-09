@@ -349,8 +349,279 @@ async function viewH2H() {
   }), PLOTLY_CFG);
 }
 
+/* ───────────────────────────── vista ANÁLISIS (telemetría bajo demanda) */
+let _pollToken = 0;
+
+async function viewAnalisis() {
+  skeleton([70, 380]);
+  const cat = await api("/telemetry/catalog");
+  $view.innerHTML = "";
+
+  if (!cat.length) {
+    $view.appendChild(el(`<div class="empty">No hay sesiones con telemetría en la caché de FastF1.
+      Carga una sesión en el laboratorio primero.</div>`));
+    return;
+  }
+  const ready = cat.find((c) => c.status === "ready");
+  if (!state.tsid || !cat.some((c) => c.sid === state.tsid))
+    state.tsid = (ready || cat[cat.length - 1]).sid;
+
+  const opts = cat.map((c) => `<option value="${c.sid}" ${c.sid === state.tsid ? "selected" : ""}>
+      ${c.year} · ${c.gp} · ${c.session}${c.status === "ready" ? " ●" : ""}</option>`).join("");
+  const controls = el(`<div class="card analysis-controls" style="margin-bottom:18px">
+    <select id="selSes" style="max-width:430px">${opts}</select>
+    <button class="btn-red" id="btnLoad">ANALIZAR</button>
+    <span style="font-size:11.5px;color:var(--ink3)">Vuelta rápida por piloto ·
+      la 1ª carga de una sesión tarda ~1 min, luego es instantáneo (●&nbsp;=&nbsp;ya en memoria)</span>
+  </div>`);
+  $view.appendChild(controls);
+  const zone = el(`<div></div>`);
+  $view.appendChild(zone);
+
+  controls.querySelector("#selSes").onchange = (e) => { state.tsid = e.target.value; state.telSel = null; };
+  controls.querySelector("#btnLoad").onclick = () => beginAnalysis(zone);
+
+  const st = await api(`/telemetry/status?sid=${encodeURIComponent(state.tsid)}`);
+  if (st.status === "ready") renderAnalysis(zone);
+  else if (st.status === "loading") beginAnalysis(zone);
+  else zone.appendChild(el(`<div class="empty">Elige una sesión y pulsa <b>ANALIZAR</b>.</div>`));
+}
+
+async function beginAnalysis(zone) {
+  const sid = state.tsid;
+  const [year, gp, ses] = sid.split("|");
+  zone.innerHTML = "";
+  zone.appendChild(el(`<div class="card loader-card"><div class="spinner"></div>
+    <div><div class="t1">Cargando ${gp} ${year} · ${ses} desde FastF1…</div>
+    <div class="t2">~1 minuto la primera vez; después queda en memoria y cambiar de piloto es instantáneo.</div></div></div>`));
+  await fetch(`/api/telemetry/load?year=${year}&gp=${encodeURIComponent(gp)}&session=${encodeURIComponent(ses)}`,
+              { method: "POST" });
+  const token = ++_pollToken;
+  const poll = async () => {
+    if (token !== _pollToken || !location.hash.includes("analisis")) return;
+    const st = await api(`/telemetry/status?sid=${encodeURIComponent(sid)}`);
+    if (st.status === "ready") return renderAnalysis(zone);
+    if (st.status === "error") {
+      zone.innerHTML = "";
+      zone.appendChild(el(`<div class="empty">No se pudo cargar la sesión: ${st.error}</div>`));
+      return;
+    }
+    setTimeout(poll, 2500);
+  };
+  setTimeout(poll, 2500);
+}
+
+async function renderAnalysis(zone) {
+  zone.innerHTML = "";
+  zone.appendChild(el(`<div class="skeleton-block" style="height:380px"></div>`));
+  const q = state.telSel && state.telSel.length ? `&drivers=${state.telSel.join(",")}` : "";
+  const d = await api(`/telemetry/analysis?sid=${encodeURIComponent(state.tsid)}${q}`);
+  state.telSel = d.drivers.map((x) => x.code);
+  zone.innerHTML = "";
+
+  // chips de pilotos (el 1º seleccionado es la referencia del delta)
+  const chipsCard = el(`<div class="card" style="margin-bottom:18px">
+    <div style="font-size:10px;letter-spacing:2px;color:var(--ink3);font-weight:700;margin-bottom:10px">
+      PILOTOS · el primero es la referencia del delta y del mapa</div>
+    <div class="drv-chips"></div></div>`);
+  const chipsWrap = chipsCard.querySelector(".drv-chips");
+  d.available.forEach((a) => {
+    const on = state.telSel.includes(a.code);
+    const isRef = a.code === d.ref;
+    const chip = el(`<span class="drv-chip ${on ? "on" : ""}" style="--cc:${a.color}"
+      title="${a.name} · ${a.team}"><i></i>${a.code}${isRef ? ' <span class="ref-tag">REF</span>' : ""}</span>`);
+    chip.onclick = () => {
+      let sel = [...state.telSel];
+      if (sel.includes(a.code)) { if (sel.length > 1) sel = sel.filter((c) => c !== a.code); }
+      else if (sel.length < 5) sel.push(a.code);
+      state.telSel = sel;
+      renderAnalysis(zone);
+    };
+    chipsWrap.appendChild(chip);
+  });
+  zone.appendChild(chipsCard);
+
+  const cornerAxis = {
+    tickvals: d.corners.map((c) => c.d), ticktext: d.corners.map((c) => String(c.n)),
+    tickfont: { size: 9.5, color: "#6b7280" }, title: { text: "CURVA", font: { size: 10 } },
+  };
+  const sectorShapes = (d.cuts || []).map((x) => ({
+    type: "line", x0: x, x1: x, yref: "paper", y0: 0, y1: 1,
+    line: { color: "rgba(255,255,255,.22)", width: 1 },
+  }));
+  const lapLabels = d.drivers.map((x) => `${x.code} ${x.lap_label} (V${x.lap_number})`).join(" · ");
+
+  // fila 1: mapa de dominancia + G-G
+  const row1 = el(`<div class="grid cols-2" style="margin-bottom:18px"></div>`);
+  zone.appendChild(row1);
+
+  const cMap = chartCard({
+    title: "Mapa de dominancia", sub: "color = quién gana cada mini-sector",
+    summary: d.summaries.map || "",
+    tips: ["<b>¿Un color domina las rectas y otro las curvas?</b> → configuraciones distintas: menos ala vs más carga.",
+           "Los números son las curvas oficiales del circuito."],
+  });
+  row1.appendChild(cMap.card);
+  const segTraces = d.segments.map((s) => ({
+    type: "scatter", mode: "lines", x: s.x, y: s.y, showlegend: false,
+    line: { color: s.color, width: 5 }, hoverinfo: "skip",
+  }));
+  const legendTraces = d.drivers.map((x) => ({
+    type: "scatter", mode: "lines", x: [null], y: [null], name: x.code,
+    line: { color: x.color, width: 5 },
+  }));
+  Plotly.newPlot(cMap.plot, [...segTraces, ...legendTraces], baseLayout({
+    height: 430, margin: { l: 10, r: 10, t: 10, b: 10 },
+    xaxis: { visible: false }, yaxis: { visible: false, scaleanchor: "x" },
+    legend: { orientation: "h", y: -0.02, x: 0.5, xanchor: "center" },
+    annotations: d.corners.map((c) => ({
+      x: c.x, y: c.y, text: String(c.n), showarrow: false,
+      font: { size: 10, color: "#8a919e" },
+    })),
+  }), PLOTLY_CFG);
+
+  const cGG = chartCard({
+    title: "G-G · envolvente de agarre", sub: "cada punto = una muestra de la vuelta",
+    tips: ["<b>¿Nube ancha a los lados?</b> → mucho paso por curva (G lateral).",
+           "<b>¿Puntos muy abajo?</b> → frenadas fuertes (G longitudinal negativa).",
+           "El borde de la nube es el límite de agarre que ese coche alcanzó."],
+  });
+  row1.appendChild(cGG.card);
+  Plotly.newPlot(cGG.plot, d.drivers.map((x) => ({
+    type: "scatter", mode: "markers", name: x.code, x: x.glat, y: x.glong,
+    marker: { color: x.color, size: 3.5, opacity: 0.45 },
+    hovertemplate: `<b>${x.code}</b><br>G lat: %{x:.2f} · G long: %{y:.2f}<extra></extra>`,
+  })), baseLayout({
+    height: 430, margin: { l: 52, r: 14, t: 12, b: 46 },
+    xaxis: { ...baseLayout().xaxis, title: { text: "G LATERAL", font: { size: 10 } },
+             showgrid: true, gridcolor: "rgba(255,255,255,.06)", griddash: "dot" },
+    yaxis: { ...baseLayout().yaxis, title: { text: "G LONGITUDINAL", font: { size: 10 } } },
+    legend: { orientation: "h", y: -0.14, x: 0.5, xanchor: "center" },
+  }), PLOTLY_CFG);
+
+  // VELOCIDAD
+  const cVel = chartCard({
+    title: "Velocidad", sub: lapLabels, summary: d.summaries.speed || "",
+    tips: ["<b>¿Una línea llega más alto en recta?</b> → menos ala o mejor tracción a la salida de la curva previa.",
+           "<b>¿Valle más estrecho en una curva?</b> → frena más tarde y suelta antes: ahí gana el tiempo.",
+           "Las líneas verticales tenues separan los sectores S1/S2/S3."],
+  });
+  zone.appendChild(cVel.card);
+  Plotly.newPlot(cVel.plot, d.drivers.map((x) => ({
+    type: "scatter", mode: "lines", name: x.code, x: x.d, y: x.speed,
+    line: { color: x.color, width: 1.9 },
+    hovertemplate: `<b>${x.code}</b> · %{y:.0f} km/h<extra></extra>`,
+  })), baseLayout({
+    height: 400, hovermode: "x unified", shapes: sectorShapes,
+    margin: { l: 56, r: 14, t: 14, b: 48 },
+    xaxis: { ...baseLayout().xaxis, ...cornerAxis },
+    yaxis: { ...baseLayout().yaxis, title: { text: "KM/H", font: { size: 10 } } },
+    legend: { orientation: "h", y: 1.08, x: 1, xanchor: "right" },
+  }), PLOTLY_CFG);
+  zone.appendChild(el(`<div style="height:18px"></div>`));
+
+  // DELTA (si hay 2+ pilotos)
+  const conDelta = d.drivers.filter((x) => x.delta);
+  if (conDelta.length) {
+    const cDelta = chartCard({
+      title: `Delta vs ${d.ref}`, sub: "abajo = más rápido que la referencia",
+      summary: d.summaries.delta || "",
+      tips: [`<b>¿La línea baja?</b> → ese piloto le está GANANDO tiempo a ${d.ref} en ese tramo.`,
+             "<b>¿Sube de golpe en una curva?</b> → ahí lo pierde: compara la frenada en esa zona.",
+             "El valor al final de la vuelta es la diferencia total de la vuelta rápida."],
+    });
+    zone.appendChild(cDelta.card);
+    Plotly.newPlot(cDelta.plot, conDelta.map((x) => ({
+      type: "scatter", mode: "lines", name: `Δ ${x.code}`, x: x.delta_d, y: x.delta,
+      line: { color: x.color, width: 2 },
+      hovertemplate: `<b>${x.code}</b> · Δ %{y:+.3f}s<extra></extra>`,
+    })), baseLayout({
+      height: 340, hovermode: "x unified", shapes: sectorShapes,
+      margin: { l: 56, r: 14, t: 14, b: 48 },
+      xaxis: { ...baseLayout().xaxis, ...cornerAxis },
+      yaxis: { ...baseLayout().yaxis, title: { text: `SEGUNDOS VS ${d.ref}`, font: { size: 10 } },
+               zeroline: true, zerolinecolor: "rgba(255,45,45,.5)", zerolinewidth: 1.5 },
+      legend: { orientation: "h", y: 1.1, x: 1, xanchor: "right" },
+    }), PLOTLY_CFG);
+    zone.appendChild(el(`<div style="height:18px"></div>`));
+  }
+
+  // fila: acelerador + freno
+  const row2 = el(`<div class="grid cols-2" style="margin-bottom:18px"></div>`);
+  zone.appendChild(row2);
+  const mkChannel = (title, key, ytitle, tips) => {
+    const c = chartCard({ title, sub: "vs distancia", tips });
+    row2.appendChild(c.card);
+    Plotly.newPlot(c.plot, d.drivers.map((x) => ({
+      type: "scatter", mode: "lines", name: x.code, x: x.d, y: x[key],
+      line: { color: x.color, width: 1.6 },
+      hovertemplate: `<b>${x.code}</b> · %{y:.0f}${key === "gear" ? "ª" : "%"}<extra></extra>`,
+    })), baseLayout({
+      height: 300, hovermode: "x unified",
+      margin: { l: 46, r: 12, t: 12, b: 44 },
+      xaxis: { ...baseLayout().xaxis, ...cornerAxis },
+      yaxis: { ...baseLayout().yaxis, title: { text: ytitle, font: { size: 10 } } },
+      legend: { orientation: "h", y: 1.12, x: 1, xanchor: "right" },
+    }), PLOTLY_CFG);
+  };
+  mkChannel("Acelerador", "throttle", "% GAS",
+    ["<b>¿Pisa a fondo antes que el otro a la salida de una curva?</b> → mejor tracción o más confianza; ahí nace la ventaja de la recta siguiente."]);
+  mkChannel("Freno", "brake", "% FRENO",
+    ["<b>¿Su frenada empieza más tarde (más a la derecha)?</b> → frena más profundo: típico punto de adelantamiento.",
+     "<b>¿Dos picos seguidos?</b> → soltó y volvió a frenar (corrección o chicane)."]);
+
+  // fila: marchas + fases
+  const row3 = el(`<div class="grid cols-2"></div>`);
+  zone.appendChild(row3);
+  const cGear = chartCard({
+    title: "Marchas", sub: "vs distancia",
+    tips: ["<b>¿Cambia una marcha menos en la misma curva?</b> → relación más larga o toma la curva con más velocidad."],
+  });
+  row3.appendChild(cGear.card);
+  Plotly.newPlot(cGear.plot, d.drivers.map((x) => ({
+    type: "scatter", mode: "lines", name: x.code, x: x.d, y: x.gear,
+    line: { color: x.color, width: 1.6, shape: "hv" },
+    hovertemplate: `<b>${x.code}</b> · %{y}ª<extra></extra>`,
+  })), baseLayout({
+    height: 300, hovermode: "x unified",
+    margin: { l: 46, r: 12, t: 12, b: 44 },
+    xaxis: { ...baseLayout().xaxis, ...cornerAxis },
+    yaxis: { ...baseLayout().yaxis, title: { text: "MARCHA", font: { size: 10 } }, dtick: 1 },
+    legend: { orientation: "h", y: 1.12, x: 1, xanchor: "right" },
+  }), PLOTLY_CFG);
+
+  const cPh = chartCard({
+    title: "Fases de conducción", sub: "% del tiempo de la vuelta",
+    summary: d.summaries.phases || "",
+    tips: ["<b>¿Más % a fondo?</b> → o el coche permite pisar antes, o el circuito se lo pide y el motor manda.",
+           "<b>¿Más % en curva que el rival?</b> → pasa más tiempo gestionando el paso por curva: ahí se decide su vuelta."],
+  });
+  row3.appendChild(cPh.card);
+  const phSeries = [
+    { key: "fondo", name: "A fondo", color: "#2ECC71" },
+    { key: "frenada", name: "Frenada", color: "#FF5252" },
+    { key: "curva", name: "En curva", color: "#FFC400" },
+  ];
+  Plotly.newPlot(cPh.plot, phSeries.map((s) => ({
+    type: "bar", orientation: "h", name: s.name,
+    y: d.drivers.map((x) => x.code).reverse(),
+    x: d.drivers.map((x) => x.phases[s.key]).reverse(),
+    marker: { color: s.color, line: { color: "#11141b", width: 2 } },
+    text: d.drivers.map((x) => `${x.phases[s.key].toFixed(0)}%`).reverse(),
+    textposition: "inside", textfont: { size: 10.5, color: "#0b0d12" },
+    hovertemplate: `%{y} · ${s.name}: %{x:.1f}%<extra></extra>`,
+  })), baseLayout({
+    height: 300, barmode: "stack",
+    margin: { l: 46, r: 12, t: 12, b: 36 },
+    xaxis: { ...baseLayout().xaxis, ticksuffix: "%" },
+    yaxis: { ...baseLayout().yaxis, gridcolor: "rgba(0,0,0,0)" },
+    legend: { orientation: "h", y: 1.14, x: 0.5, xanchor: "center" },
+  }), PLOTLY_CFG);
+}
+
 /* ───────────────────────────── router */
-const VIEWS = { temporada: viewTemporada, carrera: viewCarrera, h2h: viewH2H };
+const VIEWS = { temporada: viewTemporada, carrera: viewCarrera, h2h: viewH2H,
+                analisis: viewAnalisis };
 
 async function route() {
   const name = (location.hash.replace("#/", "") || "temporada").split("?")[0];

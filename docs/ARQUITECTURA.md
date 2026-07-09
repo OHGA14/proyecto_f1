@@ -71,7 +71,12 @@ cache.nosync/      Caché FastF1 (~GB; fuera de git y de iCloud)
 
 Todos los tiempos en SEGUNDOS (float). Re-ingerir una sesión la reemplaza (idempotente).
 - **Fase 3a — API + web broadcast** ✅ (tag `fase-3a`): **FastAPI** (`api/`) expone la base DuckDB como JSON (`/api/meta`, `/api/championship/{año}`, `/api/races/{año}`, `/api/session/detail?sid=`, `/api/h2h?a=&b=`, `/api/drivers`; Swagger en `/docs`) y sirve la **web broadcast** (`web/`): SPA sin build (HTML/CSS/JS + Plotly.js vendorizado, cero node/npm) con 3 vistas — TEMPORADA (tiles + campeonato + clasificación), CARRERA (tarjetas de GP, podio hero, ritmo, estrategia Gantt, speed trap, resultados) y HEAD-TO-HEAD (selectores + tiles + delta por GP). Cada gráfica lleva resumen calculado por la API + guía tip (la firma de la casa). **Paleta de display por equipo VALIDADA** para fondo oscuro (banda de luminosidad, croma, separación CVD, contraste 3:1) en `api/queries.py`; el 2º piloto de un equipo va aclarado. Ejecutar: `uvicorn api.main:app --port 8600`. Tests en `tests/test_api.py` (TestClient + base temporal).
-  - *Siguiente (3b):* telemetría bajo demanda en la API; migrar a React/Next si se quiere SSR/animaciones complejas — la API ya lo soporta sin cambios
+- **Fase 3b — Telemetría en la web** ✅ (tag `fase-3b`): vista **ANÁLISIS** (`#/analisis`) con 8 gráficas de vuelta rápida — mapa de dominancia por mini-sector, G-G, velocidad (números de curva como ticks + cortes de sector), delta vs referencia, acelerador, freno, marchas y fases de conducción. `api/telemetry.py` carga sesiones FastF1 **bajo demanda en un hilo** (endpoints `catalog` / `load` / `status` / `analysis`; ~1 min la 1ª vez, luego en memoria con LRU de 2 sesiones; análisis cacheado por piloto) reutilizando la física de `f1core` (`compute_gg_from_telemetry`, `_delta_series`, `_phase_pcts`). Chips de pilotos (el 1º es la referencia, máx. 5). Cada sesión analizada se auto-ingesta a DuckDB. Tests en `tests/test_telemetry.py`.
+  - *Opcional futuro:* migrar a React/Next si se quiere SSR/animaciones complejas — la API ya lo soporta sin cambios
+
+## Dónde vive el proyecto
+
+Desde jul 2026 el hogar del repo es **`~/proyectos/f1`** (fuera de iCloud Drive). iCloud causó tres incidentes (borró un symlink, dejó duplicados basura y terminó revocando el acceso a los archivos a mitad de una sesión de trabajo); el respaldo real es git + GitHub. La copia vieja en iCloud (`.../vsc/VSC_2026/VSC/proyecto_f1`) queda obsoleta — cuando macOS devuelva el acceso, copiar de ahí `cache.nosync/` y `data.nosync/` al nuevo hogar (son datos regenerables pero pesados de re-descargar) y borrarla.
 
 ## Si algo sale mal: cómo regresar
 

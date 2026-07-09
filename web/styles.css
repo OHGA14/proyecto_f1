@@ -254,6 +254,42 @@ select:focus { outline: none; border-color: rgba(255, 60, 60, .55); }
 }
 .swap:hover { color: #fff; border-color: #3a3d47; transform: rotate(180deg); }
 
+/* ─────────────────────────────────────── ANÁLISIS: chips de piloto + loader */
+.drv-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.drv-chip {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 12.5px; font-weight: 700; padding: 7px 14px;
+  border-radius: 999px; cursor: pointer; user-select: none;
+  background: var(--card2); border: 1px solid var(--border); color: #8a919e;
+  transition: all .15s;
+}
+.drv-chip i { width: 9px; height: 9px; border-radius: 3px; background: var(--cc); opacity: .35; }
+.drv-chip:hover { color: #d7dbe2; border-color: #3a3d47; }
+.drv-chip.on { color: #fff; border-color: var(--cc); box-shadow: inset 0 0 0 1px var(--cc); }
+.drv-chip.on i { opacity: 1; }
+.drv-chip .ref-tag { font-size: 9px; letter-spacing: 1px; color: var(--ink3); }
+
+@keyframes spin { to { transform: rotate(360deg); } }
+.loader-card { display: flex; align-items: center; gap: 16px; }
+.spinner {
+  width: 26px; height: 26px; border-radius: 50%; flex: 0 0 auto;
+  border: 3px solid rgba(255, 255, 255, .12); border-top-color: var(--red);
+  animation: spin .9s linear infinite;
+}
+.loader-card .t1 { font-weight: 700; }
+.loader-card .t2 { font-size: 12px; color: var(--ink3); margin-top: 2px; }
+
+.analysis-controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.btn-red {
+  border: none; cursor: pointer; font: inherit; font-weight: 800;
+  color: #fff; padding: 10px 22px; border-radius: 10px; letter-spacing: .6px;
+  background: linear-gradient(180deg, #ff3d3d, #d61f1f);
+  box-shadow: 0 4px 14px rgba(255, 45, 45, .25);
+  transition: transform .12s, box-shadow .12s;
+}
+.btn-red:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(255, 45, 45, .35); }
+.btn-red:disabled { opacity: .45; cursor: default; transform: none; }
+
 /* ─────────────────────────────────────── skeleton + footer */
 @keyframes shimmer { from { background-position: -400px 0; } to { background-position: 400px 0; } }
 .skeleton-block {

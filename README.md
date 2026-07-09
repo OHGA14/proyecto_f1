@@ -5,12 +5,12 @@ Plataforma de datos de Fórmula 1 en dos frentes: un **dashboard de telemetría*
 ## Web broadcast (FastAPI + DuckDB)
 
 ```bash
-.venv.nosync/bin/uvicorn api.main:app --port 8600
-# → http://localhost:8600        (web: TEMPORADA · CARRERA · HEAD-TO-HEAD)
+.venv/bin/uvicorn api.main:app --port 8600
+# → http://localhost:8600        (web: TEMPORADA · CARRERA · ANÁLISIS · HEAD-TO-HEAD)
 # → http://localhost:8600/docs   (API Swagger)
 ```
 
-Tres vistas instantáneas (leen la base local, no FastF1): campeonato con puntos acumulados y clasificación, detalle de carrera (podio, ritmo, estrategia de neumáticos, speed trap, resultados) y head-to-head histórico entre dos pilotos. Sin node ni build: HTML/CSS/JS con Plotly.js vendorizado, colores de equipo validados para accesibilidad (contraste y daltonismo).
+Cuatro vistas: campeonato con puntos acumulados y clasificación, detalle de carrera (podio, ritmo, estrategia de neumáticos, speed trap, resultados), **ANÁLISIS de telemetría** (mapa de dominancia por mini-sector, G-G, velocidad/delta/acelerador/freno/marchas por distancia y fases de conducción — carga sesiones FastF1 bajo demanda) y head-to-head histórico entre dos pilotos. Sin node ni build: HTML/CSS/JS con Plotly.js vendorizado, colores de equipo validados para accesibilidad (contraste y daltonismo).
 
 ## Vistas
 
@@ -27,20 +27,20 @@ Tres vistas instantáneas (leen la base local, no FastF1): campeonato con puntos
 ## Ejecutar
 
 ```bash
-python3 -m venv .venv.nosync                                # una sola vez
-.venv.nosync/bin/pip install -r requirements.txt            # una sola vez
-.venv.nosync/bin/streamlit run app_f12025.py
+/Library/Frameworks/Python.framework/Versions/3.13/bin/python3 -m venv .venv   # una sola vez
+.venv/bin/pip install -r requirements.txt                                       # una sola vez
+.venv/bin/streamlit run app_f12025.py
 ```
 
-> El venv se llama `.venv.nosync` para que iCloud no lo sincronice (iCloud además elimina symlinks, así que no se usa alias `.venv`).
+> El proyecto vive en `~/proyectos/f1`, fuera de iCloud Drive (ver docs/ARQUITECTURA.md).
 
 La primera carga de una sesión descarga los datos de FastF1 (~1–2 min) y los cachea en `cache.nosync/` (excluida de git y de iCloud). Las cargas siguientes usan la caché.
 
 ### Base de datos histórica (pestaña HISTÓRICO)
 
 ```bash
-.venv.nosync/bin/python ingest.py --cached                       # ingiere todo lo ya descargado
-.venv.nosync/bin/python ingest.py 2026 "British Grand Prix" "Race"   # una sesión concreta
+.venv/bin/python ingest.py --cached                       # ingiere todo lo ya descargado
+.venv/bin/python ingest.py 2026 "British Grand Prix" "Race"   # una sesión concreta
 ```
 
 Crea/actualiza `data.nosync/f1.duckdb` (~1 s por sesión). La pestaña HISTÓRICO consulta esa base para análisis multi-GP instantáneos. Además, **cada sesión que cargas en el dashboard se registra sola** en la base (auto-sincronización idempotente).
@@ -48,8 +48,8 @@ Crea/actualiza `data.nosync/f1.duckdb` (~1 s por sesión). La pestaña HISTÓRIC
 ### Tests
 
 ```bash
-.venv.nosync/bin/pip install -r requirements-dev.txt   # una sola vez
-.venv.nosync/bin/python -m pytest tests/
+.venv/bin/pip install -r requirements-dev.txt   # una sola vez
+.venv/bin/python -m pytest tests/
 ```
 
 ## Estructura

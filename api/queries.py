@@ -68,6 +68,9 @@ def driver_name(code):
 
 
 def _con():
+    if not db.db_exists(DB_PATH):
+        # primera ejecución sin datos: crea la base vacía (esquema incluido)
+        db.connect(path=DB_PATH).close()
     return db.connect(path=DB_PATH, read_only=True)
 
 

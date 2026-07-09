@@ -9,7 +9,7 @@ import os
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
 
-from api import queries
+from api import queries, telemetry
 
 app = FastAPI(
     title="HABIB CONTROL · F1 API",
@@ -57,6 +57,37 @@ def get_h2h(a: str = Query(..., min_length=2, max_length=4),
 def get_drivers():
     """Pilotos disponibles en la base (para selectores)."""
     return queries.drivers_index()
+
+
+# ── Telemetría bajo demanda (vista ANÁLISIS) ─────────────────────────────────
+
+@app.get("/api/telemetry/catalog")
+def get_tel_catalog():
+    """Sesiones con telemetría en la caché de FastF1 y su estado de carga."""
+    return telemetry.catalog()
+
+
+@app.post("/api/telemetry/load")
+def post_tel_load(year: int, gp: str, session: str):
+    """Empieza a cargar una sesión FastF1 en memoria (hilo en 2º plano)."""
+    return telemetry.start_load(year, gp, session)
+
+
+@app.get("/api/telemetry/status")
+def get_tel_status(sid: str):
+    """Estado de carga: cold / loading / ready / error."""
+    return telemetry.status(sid)
+
+
+@app.get("/api/telemetry/analysis")
+def get_tel_analysis(sid: str, drivers: str = ""):
+    """Análisis de vuelta rápida: canales por distancia, delta, G-G, fases,
+    mapa de dominancia. `drivers` = códigos separados por coma (vacío = top 2)."""
+    codes = [c.strip().upper() for c in drivers.split(",") if c.strip()] or None
+    out = telemetry.analysis(sid, codes)
+    if out is None:
+        raise HTTPException(409, f"La sesión {sid} no está cargada (usa /api/telemetry/load).")
+    return out
 
 
 # La web broadcast se sirve desde el mismo proceso (sin node ni build).
