@@ -15,7 +15,7 @@ import numpy as np
 import fastf1 as ff1
 
 from f1core.laps import get_selected_lap
-from f1core.physics import compute_gg_from_telemetry
+from f1core.physics import compute_gg_from_telemetry, _dtw_distance
 from f1core.timeutils import _get_sector_cut_distances
 from api.queries import driver_colors, driver_name, fmt_lap
 
@@ -153,13 +153,14 @@ def _downsample(arr, step, nd=None):
 
 # ────────────────────────────────────────────── análisis de vuelta rápida
 
-def _driver_channels(sid, code):
-    """Canales de la vuelta rápida de un piloto (cacheado). None si no hay."""
-    key = (sid, code)
+def _lap_channels(sid, code, lap_number=None):
+    """Canales de una vuelta de un piloto (rápida si lap_number=None). Cacheado."""
+    key = (sid, code, lap_number)
     if key in _TEL_CACHE:
         return _TEL_CACHE[key]
     s = _ready_session(sid)
-    lap, _why = get_selected_lap(s.laps, code, "Vuelta Rápida")
+    mode = "Vuelta Rápida" if lap_number is None else "manual"
+    lap, _why = get_selected_lap(s.laps, code, mode, lap_number)
     if lap is None:
         return None
     tel = lap.get_telemetry().add_distance()
@@ -176,13 +177,15 @@ def _driver_channels(sid, code):
     y = np.interp(d, tel["Distance"], tel["Y"])
     lt = lap["LapTime"].total_seconds() if lap["LapTime"] is not None else None
     cuts, _approx = _get_sector_cut_distances(lap, tel)
+    # cuts llega como [("S1", d1), ("S2", d2), ("S3", fin)] → solo las 2 fronteras
+    cut_ds = [float(c[1]) for c in cuts[:2]] if cuts else []
     out = {
         "d": d, "t": t_cum, "dt": dt, "x": x, "y": y,
         "speed": gg["speed_kmh"], "throttle": gg["throttle"],
         "brake": gg["brake"], "gear": gg["gear"],
         "glat": gg["glat"], "glong": gg["glong"],
         "lap_time": lt, "lap_number": int(lap["LapNumber"]),
-        "cuts": list(cuts) if cuts else [],
+        "cuts": cut_ds,
     }
     _TEL_CACHE[key] = out
     return out
@@ -207,7 +210,30 @@ def available_drivers(sid):
              "color": cols[c]} for c in codes]
 
 
+def laps_of(sid, code):
+    """Vueltas válidas de un piloto en la sesión (para el modo VS VUELTAS)."""
+    s = _ready_session(sid)
+    if s is None:
+        return None
+    sub = s.laps.pick_driver(code)
+    out = []
+    best = None
+    for _, r in sub.iterrows():
+        lt = r["LapTime"]
+        if lt is None or lt != lt:
+            continue
+        secs = lt.total_seconds()
+        out.append({"lap": int(r["LapNumber"]), "time_s": round(secs, 3),
+                    "label": f"V{int(r['LapNumber'])} — {fmt_lap(secs)}"})
+        if best is None or secs < best[1]:
+            best = (int(r["LapNumber"]), secs)
+    for o in out:
+        o["fastest"] = best is not None and o["lap"] == best[0]
+    return sorted(out, key=lambda o: o["lap"])
+
+
 def analysis(sid, codes=None):
+    """Modo PILOTOS: vuelta rápida de cada piloto seleccionado."""
     s = _ready_session(sid)
     if s is None:
         return None
@@ -217,20 +243,48 @@ def analysis(sid, codes=None):
     if not codes:
         codes = [d["code"] for d in disponibles[:2]]
     colores = {d["code"]: d["color"] for d in disponibles}
-
-    chan = {}
+    nombres = {d["code"]: d["name"] for d in disponibles}
+    entries = []
     for c in codes:
-        ch = _driver_channels(sid, c)
+        ch = _lap_channels(sid, c)
         if ch is not None:
-            chan[c] = ch
-    if not chan:
-        return {"available": disponibles, "drivers": [], "summaries": {}}
-    codes = [c for c in codes if c in chan]
-    ref = codes[0]
-    ch_ref = chan[ref]
+            entries.append({"key": c, "name": nombres.get(c, c),
+                            "color": colores.get(c, "#9aa0aa"), "ch": ch})
+    out = _assemble(s, entries)
+    out["available"] = disponibles
+    out["mode"] = "pilotos"
+    return out
+
+
+def vslaps(sid, code, lap_a, lap_b):
+    """Modo VS VUELTAS: dos vueltas del MISMO piloto (A = color piloto, B = blanco)."""
+    s = _ready_session(sid)
+    if s is None:
+        return None
+    disponibles = available_drivers(sid)
+    colores = {d["code"]: d["color"] for d in (disponibles or [])}
+    entries = []
+    for lp, col in ((lap_a, colores.get(code, "#FF2D2D")), (lap_b, "#FFFFFF")):
+        ch = _lap_channels(sid, code, lp)
+        if ch is not None:
+            entries.append({"key": f"V{lp}", "name": f"{code} vuelta {lp}",
+                            "color": col, "ch": ch})
+    out = _assemble(s, entries)
+    out["available"] = disponibles
+    out["mode"] = "vueltas"
+    out["driver"] = code
+    return out
+
+
+def _assemble(s, entries):
+    """Arma la respuesta de análisis para N 'entradas' (pilotos o vueltas)."""
+    if not entries:
+        return {"drivers": [], "summaries": {}}
+    ref = entries[0]
+    ch_ref = ref["ch"]
     step = max(1, len(ch_ref["d"]) // _N_POINTS)
 
-    # circuito: curvas (número + distancia + XY) y cortes de sector de la ref
+    # circuito: curvas (número + distancia + XY)
     corners = []
     try:
         ci = s.get_circuit_info()
@@ -241,11 +295,11 @@ def analysis(sid, codes=None):
         pass
 
     drivers = []
-    for c in codes:
-        ch = chan[c]
+    for e in entries:
+        ch = e["ch"]
         st = max(1, len(ch["d"]) // _N_POINTS)
         item = {
-            "code": c, "name": driver_name(c), "color": colores.get(c, "#9aa0aa"),
+            "code": e["key"], "name": e["name"], "color": e["color"],
             "lap_time": ch["lap_time"], "lap_label": fmt_lap(ch["lap_time"]),
             "lap_number": ch["lap_number"],
             "d": _downsample(ch["d"], st, 1),
@@ -259,32 +313,111 @@ def analysis(sid, codes=None):
         }
         f, fr, cu = _phase_pcts(ch["throttle"], ch["brake"], ch["dt"])
         item["phases"] = {"fondo": f, "frenada": fr, "curva": cu}
-        if c != ref:
+        if e is not ref:
             dx, dv = _delta_series(ch_ref["d"], ch_ref["t"], ch["d"], ch["t"])
             item["delta_d"] = _downsample(dx, step, 1)
             item["delta"] = _downsample(dv, step, 3)
         drivers.append(item)
 
-    # mapa de dominancia: la línea de la ref pintada por el más rápido por tramo
+    colores = {e["key"]: e["color"] for e in entries}
+    chans = {e["key"]: e["ch"] for e in entries}
+    keys = [e["key"] for e in entries]
+
+    # mapa de dominancia sobre la línea de la referencia
     d_total = float(ch_ref["d"][-1])
     bounds = np.linspace(0, d_total, _N_MINISECTORS + 1)
     segments = []
     for i in range(_N_MINISECTORS):
         d0, d1 = bounds[i], bounds[i + 1]
-        best_c, best_t = None, None
-        for c in codes:
-            ch = chan[c]
+        best_k, best_t = None, None
+        for k in keys:
+            ch = chans[k]
             tt = np.interp([d0, d1], ch["d"], ch["t"])
             dtse = float(tt[1] - tt[0])
             if best_t is None or dtse < best_t:
-                best_c, best_t = c, dtse
+                best_k, best_t = k, dtse
         m = (ch_ref["d"] >= d0) & (ch_ref["d"] <= d1 + 1)
         segments.append({"x": _downsample(ch_ref["x"][m], 2, 0),
                          "y": _downsample(ch_ref["y"][m], 2, 0),
-                         "code": best_c, "color": colores.get(best_c, "#9aa0aa")})
+                         "code": best_k, "color": colores.get(best_k, "#9aa0aa")})
     dom_counts = {}
     for seg in segments:
         dom_counts[seg["code"]] = dom_counts.get(seg["code"], 0) + 1
+
+    # DTW: similitud de la forma de la vuelta vs la referencia
+    dtw = []
+    if len(entries) > 1:
+        grid_max = min(float(e["ch"]["d"][-1]) for e in entries)
+        grid = np.linspace(0.0, grid_max, 220)
+        prof = {e["key"]: np.interp(grid, e["ch"]["d"], e["ch"]["speed"])
+                for e in entries}
+        for e in entries[1:]:
+            cost, path = _dtw_distance(prof[ref["key"]], prof[e["key"]])
+            if not path:
+                continue
+            media = cost / len(path)
+            if media < 2:
+                etiqueta = "casi idénticas"
+            elif media < 5:
+                etiqueta = "muy parecidas"
+            elif media < 10:
+                etiqueta = "parecidas"
+            elif media < 18:
+                etiqueta = "diferentes"
+            else:
+                etiqueta = "muy distintas"
+            imax, jmax = max(path, key=lambda ij: abs(prof[ref["key"]][ij[0]]
+                                                      - prof[e["key"]][ij[1]]))
+            d_max = float(grid[imax])
+            curva = min(corners, key=lambda c: abs(c["d"] - d_max))["n"] if corners else None
+            dtw.append({"code": e["key"], "mean_kmh": round(media, 1),
+                        "label": etiqueta, "corner": curva,
+                        "at_m": round(d_max)})
+
+    # micro-sectores estilo MultiViewer (morado/verde/amarillo)
+    micro = None
+    if len(entries) > 1:
+        cuts = ch_ref.get("cuts") or []
+        if len(cuts) >= 2:
+            spans = [("S1", 0.0, float(cuts[0])), ("S2", float(cuts[0]), float(cuts[1])),
+                     ("S3", float(cuts[1]), d_total)]
+            per = 8
+        else:
+            spans = [("VUELTA", 0.0, d_total)]
+            per = 24
+        UMBRAL = 0.02
+        wins = {k: 0 for k in keys}
+        sectores = []
+        for lbl, s0, s1 in spans:
+            edges = np.linspace(s0, s1, per + 1)
+            celdas = []
+            for i in range(per):
+                tiempos = {}
+                for k in keys:
+                    ch = chans[k]
+                    tt = np.interp([edges[i], edges[i + 1]], ch["d"], ch["t"])
+                    tiempos[k] = float(tt[1] - tt[0])
+                orden = sorted(tiempos, key=tiempos.get)
+                mejor, t_mejor = orden[0], tiempos[orden[0]]
+                margen = tiempos[orden[1]] - t_mejor if len(orden) > 1 else 0.0
+                cols, gaps = {}, {}
+                for k in keys:
+                    gap = tiempos[k] - t_mejor
+                    gaps[k] = round(gap, 3)
+                    if k == mejor:
+                        cols[k] = "p" if margen > UMBRAL else "g"
+                    else:
+                        cols[k] = "g" if gap <= UMBRAL else "y"
+                if cols[mejor] == "p":
+                    wins[mejor] += 1
+                celdas.append({"colors": cols, "gaps": gaps})
+            tot = {k: float(np.interp(s1, chans[k]["d"], chans[k]["t"])
+                            - np.interp(s0, chans[k]["d"], chans[k]["t"])) for k in keys}
+            orden_s = sorted(tot, key=tot.get)
+            margen_s = tot[orden_s[1]] - tot[orden_s[0]] if len(orden_s) > 1 else 0.0
+            sectores.append({"label": lbl, "winner": orden_s[0],
+                             "margin": round(margen_s, 3), "cells": celdas})
+        micro = {"sectors": sectores, "wins": wins, "keys": keys}
 
     # resúmenes calculados (firma de la casa)
     summaries = {}
@@ -295,17 +428,25 @@ def analysis(sid, codes=None):
                                                    for d in drivers) + ".")
     if len(drivers) > 1 and drivers[1].get("delta") is not None:
         fin = drivers[1]["delta"][-1]
-        quien = ref if fin > 0 else drivers[1]["code"]
+        quien = ref["key"] if fin > 0 else drivers[1]["code"]
         summaries["delta"] = (f"Al final de la vuelta, {quien} queda delante por "
                               f"{abs(fin):.3f}s. Recuerda: línea hacia abajo = "
-                              f"ese piloto gana tiempo a {ref}.")
+                              f"gana tiempo a {ref['key']}.")
     lider_dom = max(dom_counts, key=dom_counts.get)
     summaries["map"] = (f"{lider_dom} domina {dom_counts[lider_dom]} de "
                         f"{_N_MINISECTORS} mini-sectores del trazado.")
     fondos = " · ".join(f"{d['code']} {d['phases']['fondo']:.0f}%" for d in drivers)
     summaries["phases"] = f"% de la vuelta a fondo: {fondos}."
+    if dtw:
+        partes = "; ".join(f"{x['code']} difiere {x['mean_kmh']} km/h de media "
+                           f"({x['label']}, máx. en curva {x['corner']})" for x in dtw)
+        summaries["dtw"] = f"Similitud DTW vs {ref['key']}: {partes}."
+    if micro:
+        g = " · ".join(f"{k} {v}" for k, v in sorted(micro["wins"].items(),
+                                                     key=lambda kv: -kv[1]))
+        summaries["micro"] = f"Mini-sectores ganados (morado): {g}."
 
-    return {"available": disponibles, "ref": ref, "drivers": drivers,
-            "corners": corners, "cuts": ch_ref["cuts"], "segments": segments,
-            "summaries": summaries,
-            "info": {"sid": sid, "total_m": round(d_total)}}
+    return {"ref": ref["key"], "drivers": drivers, "corners": corners,
+            "cuts": ch_ref.get("cuts") or [], "segments": segments,
+            "dtw": dtw, "micro": micro, "summaries": summaries,
+            "info": {"total_m": round(d_total)}}

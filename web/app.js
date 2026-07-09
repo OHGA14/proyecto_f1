@@ -489,19 +489,34 @@ async function beginAnalysis(zone) {
 
 async function renderAnalysis(zone) {
   zone.innerHTML = "";
+  const modes = el(`<div class="pills" style="margin-bottom:14px">
+    <button class="pill ${state.telMode !== "vueltas" ? "active" : ""}">COMPARAR PILOTOS</button>
+    <button class="pill ${state.telMode === "vueltas" ? "active" : ""}">2 VUELTAS DE UN PILOTO</button>
+  </div>`);
+  const [bp, bv] = modes.querySelectorAll("button");
+  bp.onclick = () => { state.telMode = "pilotos"; renderAnalysis(zone); };
+  bv.onclick = () => { state.telMode = "vueltas"; renderAnalysis(zone); };
+  zone.appendChild(modes);
+  const sub = el(`<div></div>`);
+  zone.appendChild(sub);
+  if (state.telMode === "vueltas") return renderVsLaps(sub);
+  return renderPilotos(sub);
+}
+
+async function renderPilotos(zone) {
+  zone.innerHTML = "";
   zone.appendChild(el(`<div class="skeleton-block" style="height:380px"></div>`));
   const q = state.telSel && state.telSel.length ? `&drivers=${state.telSel.join(",")}` : "";
   const d = await api(`/telemetry/analysis?sid=${encodeURIComponent(state.tsid)}${q}`);
   state.telSel = d.drivers.map((x) => x.code);
   zone.innerHTML = "";
 
-  // chips de pilotos (el 1º seleccionado es la referencia del delta)
   const chipsCard = el(`<div class="card" style="margin-bottom:18px">
     <div style="font-size:10px;letter-spacing:2px;color:var(--ink3);font-weight:700;margin-bottom:10px">
       PILOTOS · el primero es la referencia del delta y del mapa</div>
     <div class="drv-chips"></div></div>`);
   const chipsWrap = chipsCard.querySelector(".drv-chips");
-  d.available.forEach((a) => {
+  (d.available || []).forEach((a) => {
     const on = state.telSel.includes(a.code);
     const isRef = a.code === d.ref;
     const chip = el(`<span class="drv-chip ${on ? "on" : ""}" style="--cc:${a.color}"
@@ -511,12 +526,65 @@ async function renderAnalysis(zone) {
       if (sel.includes(a.code)) { if (sel.length > 1) sel = sel.filter((c) => c !== a.code); }
       else if (sel.length < 5) sel.push(a.code);
       state.telSel = sel;
-      renderAnalysis(zone);
+      renderPilotos(zone);
     };
     chipsWrap.appendChild(chip);
   });
   zone.appendChild(chipsCard);
+  drawTelCharts(zone, d);
+}
 
+async function renderVsLaps(zone) {
+  zone.innerHTML = "";
+  zone.appendChild(el(`<div class="skeleton-block" style="height:110px"></div>`));
+  const drivers = await api(`/telemetry/drivers?sid=${encodeURIComponent(state.tsid)}`);
+  if (!state.vsDriver || !drivers.some((x) => x.code === state.vsDriver))
+    state.vsDriver = drivers[0].code;
+  const lapsList = await api(`/telemetry/laps?sid=${encodeURIComponent(state.tsid)}&driver=${state.vsDriver}`);
+  if (lapsList.length < 2) {
+    zone.innerHTML = "";
+    zone.appendChild(el(`<div class="empty">${state.vsDriver} no tiene suficientes vueltas válidas.</div>`));
+    return;
+  }
+  const rapida = lapsList.find((l) => l.fastest) || lapsList[0];
+  if (!state.vsA || !lapsList.some((l) => l.lap === state.vsA)) state.vsA = rapida.lap;
+  if (!state.vsB || !lapsList.some((l) => l.lap === state.vsB) || state.vsB === state.vsA) {
+    const otras = lapsList.filter((l) => l.lap !== state.vsA)
+                          .sort((a, b) => a.time_s - b.time_s);
+    state.vsB = otras[0].lap;
+  }
+  zone.innerHTML = "";
+  const opts = (sel) => lapsList.map((l) =>
+    `<option value="${l.lap}" ${l.lap === sel ? "selected" : ""}>${l.label}${l.fastest ? " ★" : ""}</option>`).join("");
+  const controls = el(`<div class="card h2h-controls" style="margin-bottom:18px">
+    <select id="vsDrv">${drivers.map((x) =>
+      `<option value="${x.code}" ${x.code === state.vsDriver ? "selected" : ""}>${x.code} · ${x.name}</option>`).join("")}</select>
+    <select id="vsA">${opts(state.vsA)}</select>
+    <span class="vs">VS</span>
+    <select id="vsB">${opts(state.vsB)}</select>
+    <span style="font-size:11.5px;color:var(--ink3)">ideal para qualy: primer intento vs
+      definitivo · vuelta A = color del piloto, B = blanco · ★ = su vuelta rápida</span>
+  </div>`);
+  zone.appendChild(controls);
+  controls.querySelector("#vsDrv").onchange = (e) => {
+    state.vsDriver = e.target.value; state.vsA = null; state.vsB = null; renderVsLaps(zone);
+  };
+  controls.querySelector("#vsA").onchange = (e) => { state.vsA = +e.target.value; renderVsLaps(zone); };
+  controls.querySelector("#vsB").onchange = (e) => { state.vsB = +e.target.value; renderVsLaps(zone); };
+  if (state.vsA === state.vsB) {
+    zone.appendChild(el(`<div class="empty">Elige dos vueltas distintas.</div>`));
+    return;
+  }
+  const chartsZone = el(`<div></div>`);
+  zone.appendChild(chartsZone);
+  chartsZone.appendChild(el(`<div class="skeleton-block" style="height:380px"></div>`));
+  const d = await api(`/telemetry/vslaps?sid=${encodeURIComponent(state.tsid)}` +
+                      `&driver=${state.vsDriver}&lap_a=${state.vsA}&lap_b=${state.vsB}`);
+  chartsZone.innerHTML = "";
+  drawTelCharts(chartsZone, d);
+}
+
+function drawTelCharts(zone, d) {
   const cornerAxis = {
     tickvals: d.corners.map((c) => c.d), ticktext: d.corners.map((c) => String(c.n)),
     tickfont: { size: 9.5, color: "#6b7280" }, title: { text: "CURVA", font: { size: 10 } },
@@ -526,6 +594,19 @@ async function renderAnalysis(zone) {
     line: { color: "rgba(255,255,255,.22)", width: 1 },
   }));
   const lapLabels = d.drivers.map((x) => `${x.code} ${x.lap_label} (V${x.lap_number})`).join(" · ");
+
+  if (d.dtw && d.dtw.length) {
+    zone.appendChild(el(`<div class="card" style="margin-bottom:18px">
+      <div class="chart-head" style="padding:0 0 4px"><h2>Similitud DTW · ¿qué tan parecidas son las vueltas?</h2>
+        <span class="sub">vs ${d.ref} · menor = más parecida</span></div>
+      ${d.dtw.map((x) => `<div class="chart-summary" style="margin:8px 0 0">
+        <b>${x.code}</b>: difiere <b>${x.mean_kmh} km/h</b> de media → vueltas ${x.label}.
+        Máxima diferencia en la curva ${x.corner} (~${x.at_m} m).</div>`).join("")}
+      <details class="chart-guide" style="margin:8px 0 0"><summary>¿Cómo leer esto?</summary><ul>
+        <li>El DTW alinea las dos curvas de velocidad permitiendo pequeños desfases (frenar unos metros antes o después) y mide cuánto difieren DE VERDAD.</li>
+        <li><b>¿"casi idénticas" pero el delta final es grande?</b> → mismo estilo, distinta ejecución: la diferencia está en UNA curva concreta — la que te señala aquí.</li>
+      </ul></details></div>`));
+  }
 
   // fila 1: mapa de dominancia + G-G
   const row1 = el(`<div class="grid cols-2" style="margin-bottom:18px"></div>`);
@@ -574,6 +655,29 @@ async function renderAnalysis(zone) {
     yaxis: { ...baseLayout().yaxis, title: { text: "G LONGITUDINAL", font: { size: 10 } } },
     legend: { orientation: "h", y: -0.14, x: 0.5, xanchor: "center" },
   }), PLOTLY_CFG);
+
+  if (d.micro) {
+    const m = d.micro;
+    const colorDe = (k) => (d.drivers.find((x) => x.code === k) || {}).color || "#ddd";
+    const lbls = `<div class="ms-col-lbl"><div class="ms-head">&nbsp;</div>${m.keys.map((k) =>
+      `<div class="ms-lbl" style="color:${colorDe(k)}">${k}</div>`).join("")}</div>`;
+    const secs = m.sectors.map((sc) => {
+      const rows = m.keys.map((k) => `<div class="ms-row">${sc.cells.map((c) =>
+        `<span class="ms-cell ms-${c.colors[k]}" title="${k}: +${c.gaps[k].toFixed(3)}s vs el mejor del tramo"></span>`).join("")}</div>`).join("");
+      return `<div class="ms-sector"><div class="ms-head"><b>${sc.label}</b>
+        <span>gana ${sc.winner} +${sc.margin.toFixed(3)}s</span></div>${rows}</div>`;
+    }).join("");
+    zone.appendChild(el(`<div class="card chart-card" style="margin-bottom:18px">
+      <div class="chart-head"><h2>Micro-sectores</h2>
+        <span class="sub">morado = más rápido · verde = empate (&lt;0.02s) · amarillo = más lento</span></div>
+      <div style="padding:8px 18px 2px"><div class="ms-wrap">${lbls}${secs}</div></div>
+      ${d.summaries.micro ? `<div class="chart-summary">${d.summaries.micro}</div>` : ""}
+      <details class="chart-guide"><summary>¿Cómo leer esta gráfica?</summary><ul>
+        <li><b>¿Una fila casi toda morada en un sector?</b> → ahí vive su ventaja; ve a ese tramo en la gráfica de velocidad.</li>
+        <li><b>¿Mucho verde?</b> → van empatados; la vuelta se decide en los pocos tramos con color.</li>
+        <li>Pasa el cursor sobre una celda para ver el tiempo exacto perdido en ese tramo.</li>
+      </ul></details></div>`));
+  }
 
   // VELOCIDAD
   const cVel = chartCard({

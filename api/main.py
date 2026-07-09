@@ -82,11 +82,38 @@ def get_tel_status(sid: str):
 @app.get("/api/telemetry/analysis")
 def get_tel_analysis(sid: str, drivers: str = ""):
     """Análisis de vuelta rápida: canales por distancia, delta, G-G, fases,
-    mapa de dominancia. `drivers` = códigos separados por coma (vacío = top 2)."""
+    mapa de dominancia, DTW y micro-sectores. `drivers` = códigos por coma."""
     codes = [c.strip().upper() for c in drivers.split(",") if c.strip()] or None
     out = telemetry.analysis(sid, codes)
     if out is None:
         raise HTTPException(409, f"La sesión {sid} no está cargada (usa /api/telemetry/load).")
+    return out
+
+
+@app.get("/api/telemetry/drivers")
+def get_tel_drivers(sid: str):
+    """Pilotos de la sesión cargada, ordenados por vuelta rápida."""
+    out = telemetry.available_drivers(sid)
+    if out is None:
+        raise HTTPException(409, f"La sesión {sid} no está cargada.")
+    return out
+
+
+@app.get("/api/telemetry/laps")
+def get_tel_laps(sid: str, driver: str):
+    """Vueltas válidas de un piloto (para el modo VS VUELTAS)."""
+    out = telemetry.laps_of(sid, driver.upper())
+    if out is None:
+        raise HTTPException(409, f"La sesión {sid} no está cargada.")
+    return out
+
+
+@app.get("/api/telemetry/vslaps")
+def get_tel_vslaps(sid: str, driver: str, lap_a: int, lap_b: int):
+    """Comparación de dos vueltas del MISMO piloto (A = color piloto, B = blanco)."""
+    out = telemetry.vslaps(sid, driver.upper(), lap_a, lap_b)
+    if out is None:
+        raise HTTPException(409, f"La sesión {sid} no está cargada.")
     return out
 
 

@@ -271,6 +271,26 @@ select:focus { outline: none; border-color: rgba(255, 60, 60, .55); }
 .drv-chip.on i { opacity: 1; }
 .drv-chip .ref-tag { font-size: 9px; letter-spacing: 1px; color: var(--ink3); }
 
+/* micro-sectores estilo MultiViewer */
+.ms-wrap { display: flex; gap: 16px; overflow-x: auto; padding: 4px 0 8px; }
+.ms-col-lbl { flex: 0 0 auto; }
+.ms-head {
+  display: flex; justify-content: space-between; gap: 10px;
+  font-size: 10px; color: var(--ink3); margin-bottom: 7px; height: 14px;
+  letter-spacing: .6px; white-space: nowrap;
+}
+.ms-head b { color: var(--ink2); letter-spacing: 1.5px; }
+.ms-lbl {
+  height: 18px; line-height: 18px; margin-bottom: 5px;
+  font-size: 11.5px; font-weight: 800; text-align: right; padding-right: 4px;
+}
+.ms-sector { flex: 1 1 auto; min-width: 120px; }
+.ms-row { display: flex; gap: 3px; margin-bottom: 5px; height: 18px; }
+.ms-cell { flex: 1 1 auto; min-width: 10px; border-radius: 3px; }
+.ms-p { background: #B026FF; }
+.ms-g { background: #00E676; }
+.ms-y { background: #F2C94C; }
+
 @keyframes spin { to { transform: rotate(360deg); } }
 .loader-card { display: flex; align-items: center; gap: 16px; }
 .spinner {
