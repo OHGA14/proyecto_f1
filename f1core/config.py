@@ -66,28 +66,33 @@ DRIVER_DB = {
 
 DRIVER_COLORS = {abbr: info['color'] for abbr, info in DRIVER_DB.items()}
 
+# Paleta VALIDADA para fondo oscuro (banda de luminosidad, croma, separación
+# para daltonismo y contraste ≥3:1 sobre #11141b) conservando la identidad de
+# cada equipo. Los tonos crudos de marca (p. ej. Williams #0E3D80) desaparecían
+# sobre el fondo del dashboard.
 TEAM_COLORS = {
     # ── 2026 ──────────────────────────────────────────────────────────────────
-    "Red Bull":        "#27508C",
-    "Red Bull Racing": "#27508C",
-    "Ferrari":         "#A20020",
-    "Mercedes":        "#18BFA3",
-    "McLaren":         "#BE5F00",
-    "Aston Martin":    "#17664B",
+    "Red Bull":        "#5B8FD9",
+    "Red Bull Racing": "#5B8FD9",
+    "Ferrari":         "#E0243F",
+    "Mercedes":        "#14A38C",
+    "McLaren":         "#C46A0A",
+    "Aston Martin":    "#23855E",
     "Alpine":          "#FF2E9A",
-    "Williams":        "#0E3D80",
-    "Audi":            "#B82100",
-    "Haas":            "#A7AEB0",
-    "Haas F1 Team":    "#A7AEB0",
-    "Racing Bulls":    "#3062DE",
-    "RB":              "#3062DE",
-    "Cadillac":        "#79797C",
-    "Cadillac F1":     "#79797C",
+    "Williams":        "#2C5FC4",
+    "Audi":            "#D23A18",
+    "Haas":            "#6E8FD0",
+    "Haas F1 Team":    "#6E8FD0",
+    "Racing Bulls":    "#3F7BF0",
+    "RB":              "#3F7BF0",
+    "Cadillac":        "#C9A227",
+    "Cadillac F1":     "#C9A227",
     # ── Compatibilidad temporadas anteriores ──────────────────────────────────
     "Kick Sauber":     "#52E252",
     "Sauber":          "#52E252",
-    "AlphaTauri":      "#4E7C9B",
-    "Toro Rosso":      "#4E7C9B",
+    "Alfa Romeo":      "#52E252",
+    "AlphaTauri":      "#6BA3C8",
+    "Toro Rosso":      "#6BA3C8",
 }
 
 _TEAM_COLORS_NORM = {k.lower(): v for k, v in TEAM_COLORS.items()}

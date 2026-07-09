@@ -2,6 +2,7 @@
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+import plotly.io as pio
 from plotly.subplots import make_subplots
 
 from f1core.config import (DIST_CHART_CONFIG, MICRO_PURPLE, MICRO_GREEN,
@@ -10,6 +11,30 @@ from f1core.colors import get_neon_color, get_driver_color, get_driver_name, _ad
 from f1core.timeutils import format_time, _format_sector_time
 from f1core.laps import _mark_outlier_laps
 from f1core.physics import _build_minisector_layout
+
+# ─── Template global "habib_dark": mismo sistema visual que la web broadcast ───
+# (tipografía, tooltips, grid punteado sutil y colorway VALIDADO para fondo
+# oscuro). Se registra al importar y queda como default de todas las figuras.
+_FONT = "Inter, Roboto, sans-serif"
+_HABIB_DARK = go.layout.Template(pio.templates["plotly_dark"])
+_HABIB_DARK.layout.update(
+    paper_bgcolor="rgba(0,0,0,0)",
+    plot_bgcolor="rgba(0,0,0,0)",
+    font=dict(family=_FONT, color="#c8cdd6", size=12),
+    hoverlabel=dict(bgcolor="#1a1e27", bordercolor="#3a3d47",
+                    font=dict(family=_FONT, color="#f3f4f6", size=12)),
+    xaxis=dict(gridcolor="rgba(255,255,255,0.05)", griddash="dot",
+               zeroline=False, linecolor="#2b2e37"),
+    yaxis=dict(gridcolor="rgba(255,255,255,0.07)", griddash="dot",
+               zeroline=False, linecolor="#2b2e37"),
+    legend=dict(font=dict(family=_FONT, color="#b3bac6", size=11.5),
+                bgcolor="rgba(0,0,0,0)"),
+    title=dict(font=dict(family=_FONT, color="#f3f4f6")),
+    colorway=["#5B8FD9", "#E0243F", "#14A38C", "#C46A0A", "#23855E",
+              "#FF2E9A", "#2C5FC4", "#D23A18", "#6E8FD0", "#3F7BF0"],
+)
+pio.templates["habib_dark"] = _HABIB_DARK
+pio.templates.default = "habib_dark"
 
 
 def make_god_chart(fig, title, y_label, x_label="Distancia (m)", height=600):
@@ -28,42 +53,28 @@ def make_god_chart(fig, title, y_label, x_label="Distancia (m)", height=600):
 
     """
 
-    # Clean professional layout for broadcast
+    # Layout broadcast alineado con la web (template habib_dark)
 
     fig.update_layout(
 
-        template="plotly_dark",
+        template="habib_dark",
 
-        title=dict(text=f"{title}", font=dict(size=20, color="#FFFFFF", family="Roboto"), x=0, y=0.98),
-
-        plot_bgcolor="rgba(0,0,0,0)",
-
-        paper_bgcolor="rgba(0,0,0,0)",
+        title=dict(text=f"{title}", font=dict(size=16, color="#f3f4f6", family=_FONT), x=0, y=0.98),
 
         height=height,
 
         hovermode="x unified",
 
-        margin=dict(l=48, r=12, t=56, b=42),
+        margin=dict(l=48, r=12, t=54, b=42),
 
-        legend=dict(orientation="h", y=1.02, x=1, xanchor="right", bgcolor="rgba(0,0,0,0)", font=dict(family="Roboto", size=12, color="#AAA")),
+        legend=dict(orientation="h", y=1.02, x=1, xanchor="right"),
 
-        xaxis=dict(title=dict(text=x_label, font=dict(family="Roboto", size=12, color="#AAA")), showgrid=False, zeroline=False, showline=True, linecolor="#2b2b2b",
+        xaxis=dict(title=dict(text=x_label, font=dict(size=11, color="#9aa0aa")), showgrid=False, zeroline=False, showline=True, linecolor="#2b2e37",
                    showspikes=True, spikemode="across", spikesnap="cursor", spikethickness=1, spikedash="dot", spikecolor="rgba(255,255,255,0.35)"),
 
-        yaxis=dict(title=dict(text=y_label, font=dict(family="Roboto", size=12, color="#AAA")), showgrid=False, zeroline=False, showline=True, linecolor="#2b2b2b"),
-
-        font=dict(family="Roboto", color="#ddd")
+        yaxis=dict(title=dict(text=y_label, font=dict(size=11, color="#9aa0aa")), showgrid=True, zeroline=False, showline=True, linecolor="#2b2e37"),
 
     )
-
-    # Hover label: simple, no neon borders
-
-    hover_cfg = dict(bgcolor="rgba(20,20,20,0.9)", font=dict(family="Roboto", size=12, color="#FFF"), align="left")
-
-    fig.update_traces(hoverlabel=hover_cfg)
-
-    fig.update_layout(hoverlabel=hover_cfg)
 
     return fig
 
@@ -186,7 +197,7 @@ def build_microsector_bar(tel_list, color_map, sector_cuts=None, mini_per_sector
     fig.update_xaxes(visible=False, range=[-3.6, total_x - 0.1])
     fig.update_yaxes(visible=False, range=[-0.1, n_rows + 1.0])
     fig.update_layout(
-        template="plotly_dark", height=height,
+        template="habib_dark", height=height,
         plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
         margin=dict(l=10, r=10, t=30 if title else 10, b=6),
         title=dict(text=title, font=dict(size=14, color="#DDD")) if title else None,
@@ -322,7 +333,7 @@ def build_minisector_dominance_map(tel_dict, driver_colors, circuit=None, n_sect
     pad_x = (x_max - x_min) * 0.06 or 1
     pad_y = (y_max - y_min) * 0.06 or 1
     fig.update_layout(
-        template="plotly_dark", height=height,
+        template="habib_dark", height=height,
         plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
         margin=dict(l=0, r=0, t=10, b=0),
         xaxis=dict(visible=False, showgrid=False, scaleanchor="y", scaleratio=1, range=[x_min - pad_x, x_max + pad_x]),
@@ -419,7 +430,7 @@ def build_gp_tempo_chart(laps_vip_df, drivers, show_outliers=True, height=560):
         )
 
     fig.update_layout(
-        template="plotly_dark",
+        template="habib_dark",
         height=height,
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
@@ -448,7 +459,7 @@ def build_historic_pace_chart(df, color_map, height=520):
             hovertemplate=f"<b>{drv}</b> · %{{x}}<br>+%{{y:.2f}}% sobre la mejor vuelta<extra></extra>",
         ))
     fig.update_layout(
-        template="plotly_dark", height=height,
+        template="habib_dark", height=height,
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(14,17,23,1)",
         font=dict(family="Roboto", color="#e6e6e6"),
         yaxis=dict(title="% SOBRE LA MEJOR VUELTA DEL GP", ticksuffix="%",
@@ -481,7 +492,7 @@ def build_championship_chart(df, color_map, height=520):
                                text=f" {drv}", showarrow=False, xanchor="left",
                                font=dict(color=color_map.get(drv, "#9aa0aa"), size=11))
     fig.update_layout(
-        template="plotly_dark", height=height,
+        template="habib_dark", height=height,
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(14,17,23,1)",
         font=dict(family="Roboto", color="#e6e6e6"),
         yaxis=dict(title="PUNTOS ACUMULADOS", showgrid=True,
@@ -508,7 +519,7 @@ def build_h2h_history_chart(df, drv_a, drv_b, col_a, col_b, height=460):
     ))
     fig.add_hline(y=0, line_color="rgba(255,255,255,.35)", line_width=1)
     fig.update_layout(
-        template="plotly_dark", height=height,
+        template="habib_dark", height=height,
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(14,17,23,1)",
         font=dict(family="Roboto", color="#e6e6e6"),
         yaxis=dict(title=f"Δ MEJOR VUELTA (s) · abajo = {drv_a} más rápido",

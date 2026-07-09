@@ -313,7 +313,7 @@ def render(ctx):
                 ))
 
             fig_gg.update_layout(
-                template="plotly_dark",
+                template="habib_dark",
                 title=dict(text=f"<b>G-G PLOT: {get_driver_name(tgt)}</b>", font=dict(size=20, color="white")),
                 height=680,
                 plot_bgcolor="rgba(0,0,0,0.4)",

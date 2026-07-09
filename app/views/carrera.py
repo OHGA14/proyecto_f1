@@ -227,7 +227,7 @@ def render(ctx):
                     hovertemplate=f"{get_driver_name(d)}<br>Vuelta %{{x}}<br>Pit lane: %{{y:.2f}}s<extra></extra>"
                 ))
             fig_pits.update_layout(
-                template="plotly_dark",
+                template="habib_dark",
                 height=340,
                 plot_bgcolor="rgba(0,0,0,0)",
                 paper_bgcolor="rgba(0,0,0,0)",
@@ -410,7 +410,7 @@ def render(ctx):
                     hoverinfo="text", hovertext=hover_s
                 ))
             fig_stint.update_layout(
-                template="plotly_dark",
+                template="habib_dark",
                 xaxis=dict(title="Stint", tickmode='linear', dtick=1),
                 yaxis=dict(title="Ritmo mediano (s)", autorange="reversed"),
                 margin=dict(l=50, r=20, t=40, b=40),

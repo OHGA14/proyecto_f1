@@ -49,6 +49,8 @@ cache.nosync/      Caché FastF1 (~GB; fuera de git y de iCloud)
 | G's sobre malla uniforme de distancia | Timestamps crudos irregulares generan picos falsos de ±30G |
 | X/Y de FastF1 en decímetros | Dividir /10 antes de curvatura/G lateral |
 | Delta "abajo = más rápido" | Convención TV F1, pedida explícitamente |
+| Template Plotly global `habib_dark` (en `f1core/charts.py`) | Mismo sistema visual en dashboard y web: tipografía, tooltips, grid punteado; se registra al importar y es el default de TODAS las figuras |
+| `TEAM_COLORS` = paleta validada (no los tonos crudos de marca) | Los azules oscuros reales desaparecen sobre fondo oscuro; la paleta pasa contraste ≥3:1, daltonismo y banda de luminosidad conservando la identidad |
 | launch.json con ruta absoluta al streamlit global | macOS (TCC) bloquea ejecutar binarios dentro de iCloud Drive desde el lanzador de preview |
 
 ## Roadmap (acordado jul 2026)

@@ -591,7 +591,7 @@ def render(ctx):
                 base_annotations.append(cu_label_ann)
 
             fig.update_layout(
-                template="plotly_dark",
+                template="habib_dark",
                 height=fig_height,
                 plot_bgcolor="rgba(0,0,0,0)",
                 paper_bgcolor="rgba(0,0,0,0)",
