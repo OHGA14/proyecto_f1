@@ -1,6 +1,16 @@
 # F1 Data Dashboard
 
-Dashboard de telemetría y estrategia de Fórmula 1 construido con **Streamlit + FastF1 + Plotly**. Análisis de vuelta rápida, comparativas entre pilotos, física del coche (fuerzas G, fases de conducción), estrategia de carrera y replay animado — con resúmenes calculados y guías de lectura en cada gráfica.
+Plataforma de datos de Fórmula 1 en dos frentes: un **dashboard de telemetría** (Streamlit + FastF1 + Plotly) para el análisis profundo de cada sesión, y un **data center web** (FastAPI + DuckDB) estilo broadcast para el histórico multi-GP. Toda gráfica lleva resumen calculado con datos reales y guía de lectura.
+
+## Web broadcast (FastAPI + DuckDB)
+
+```bash
+.venv.nosync/bin/uvicorn api.main:app --port 8600
+# → http://localhost:8600        (web: TEMPORADA · CARRERA · HEAD-TO-HEAD)
+# → http://localhost:8600/docs   (API Swagger)
+```
+
+Tres vistas instantáneas (leen la base local, no FastF1): campeonato con puntos acumulados y clasificación, detalle de carrera (podio, ritmo, estrategia de neumáticos, speed trap, resultados) y head-to-head histórico entre dos pilotos. Sin node ni build: HTML/CSS/JS con Plotly.js vendorizado, colores de equipo validados para accesibilidad (contraste y daltonismo).
 
 ## Vistas
 

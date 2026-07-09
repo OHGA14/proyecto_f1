@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HABIB CONTROL · F1 Data Center</title>
+<link rel="stylesheet" href="styles.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='50' height='50' fill='white'/><rect x='50' y='50' width='50' height='50' fill='white'/><rect x='50' width='50' height='50' fill='black'/><rect y='50' width='50' height='50' fill='black'/></svg>">
+<script src="vendor/plotly.min.js"></script>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="flag" aria-hidden="true"></span>
+    <div class="wordmark">
+      <div class="live"><span class="dot"></span>LIVE DATA CENTER</div>
+      <h1><span class="a">HABIB</span> <span class="b">CONTROL</span></h1>
+      <div class="sub">F1 · HISTÓRICO MULTI-GP · DUCKDB</div>
+    </div>
+  </div>
+  <nav class="nav" id="nav">
+    <a href="#/temporada" data-view="temporada" class="active">TEMPORADA</a>
+    <a href="#/carrera"  data-view="carrera">CARRERA</a>
+    <a href="#/h2h"      data-view="h2h">HEAD-TO-HEAD</a>
+  </nav>
+</header>
+
+<main id="view" class="view">
+  <div class="skeleton-block" style="height:120px"></div>
+  <div class="skeleton-block" style="height:420px"></div>
+</main>
+
+<footer class="footer">
+  HABIB CONTROL · datos de FastF1 · base DuckDB local · la web lee la API en
+  <code>/api</code> (<a href="/docs" target="_blank" rel="noopener">documentación</a>)
+</footer>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

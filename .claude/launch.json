@@ -6,6 +6,12 @@
       "runtimeExecutable": "/Library/Frameworks/Python.framework/Versions/3.13/bin/streamlit",
       "runtimeArgs": ["run", "app_f12025.py", "--server.headless", "true", "--server.port", "8511"],
       "port": 8511
+    },
+    {
+      "name": "f1-api",
+      "runtimeExecutable": "/Library/Frameworks/Python.framework/Versions/3.13/bin/uvicorn",
+      "runtimeArgs": ["api.main:app", "--port", "8600"],
+      "port": 8600
     }
   ]
 }

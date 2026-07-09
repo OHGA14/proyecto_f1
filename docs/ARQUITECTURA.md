@@ -27,6 +27,9 @@ app/               Capa de UI Streamlit
                    variables entre sí (verificado: cero filtraciones entre pestañas)
 f1core/db.py       Capa DuckDB: esquema, ingesta idempotente, consultas
 ingest.py          CLI de ingesta FastF1 → DuckDB (una sesión o --cached)
+api/               FastAPI: la base DuckDB como JSON + sirve la web (main.py, queries.py)
+web/               Web broadcast sin build: index.html + styles.css + app.js + Plotly vendorizado
+tests/             pytest: motor de datos y API (sin red, con sesiones falsas)
 docs/              Este documento
 data.nosync/       f1.duckdb (derivada, regenerable; fuera de git/iCloud)
 legacy/            Versiones viejas (no versionado)
@@ -65,7 +68,8 @@ cache.nosync/      Caché FastF1 (~GB; fuera de git y de iCloud)
 | `laps` | session_id + driver + lap | time_s, s1/s2/s3_s, compound, tyre_life, stint, speed_st/fl, is_pit_in/out, track_status, is_accurate |
 
 Todos los tiempos en SEGUNDOS (float). Re-ingerir una sesión la reemplaza (idempotente).
-- **Fase 3 — UI profesional**: FastAPI sirviendo los `go.Figure` como JSON (`fig.to_json()`) + frontend React/Next.js con `react-plotly.js`. Streamlit queda como laboratorio
+- **Fase 3a — API + web broadcast** ✅ (tag `fase-3a`): **FastAPI** (`api/`) expone la base DuckDB como JSON (`/api/meta`, `/api/championship/{año}`, `/api/races/{año}`, `/api/session/detail?sid=`, `/api/h2h?a=&b=`, `/api/drivers`; Swagger en `/docs`) y sirve la **web broadcast** (`web/`): SPA sin build (HTML/CSS/JS + Plotly.js vendorizado, cero node/npm) con 3 vistas — TEMPORADA (tiles + campeonato + clasificación), CARRERA (tarjetas de GP, podio hero, ritmo, estrategia Gantt, speed trap, resultados) y HEAD-TO-HEAD (selectores + tiles + delta por GP). Cada gráfica lleva resumen calculado por la API + guía tip (la firma de la casa). **Paleta de display por equipo VALIDADA** para fondo oscuro (banda de luminosidad, croma, separación CVD, contraste 3:1) en `api/queries.py`; el 2º piloto de un equipo va aclarado. Ejecutar: `uvicorn api.main:app --port 8600`. Tests en `tests/test_api.py` (TestClient + base temporal).
+  - *Siguiente (3b):* telemetría bajo demanda en la API; migrar a React/Next si se quiere SSR/animaciones complejas — la API ya lo soporta sin cambios
 
 ## Si algo sale mal: cómo regresar
 

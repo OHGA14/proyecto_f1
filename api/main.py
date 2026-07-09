@@ -1,0 +1,65 @@
+"""HABIB CONTROL · F1 API — FastAPI sobre la base DuckDB.
+
+Ejecutar:  .venv.nosync/bin/uvicorn api.main:app --port 8600
+Web:       http://localhost:8600      (interfaz broadcast)
+Docs API:  http://localhost:8600/docs (Swagger autogenerado)
+"""
+import os
+
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.staticfiles import StaticFiles
+
+from api import queries
+
+app = FastAPI(
+    title="HABIB CONTROL · F1 API",
+    description="Datos históricos de F1 (DuckDB): campeonatos, carreras, "
+                "estrategia y head-to-head. Todos los tiempos en segundos.",
+    version="1.0.0",
+)
+
+
+@app.get("/api/meta")
+def get_meta():
+    """Temporadas disponibles y tamaño de la base."""
+    return queries.meta()
+
+
+@app.get("/api/championship/{year}")
+def get_championship(year: int):
+    """Puntos acumulados por piloto (Carrera + Sprint) de una temporada."""
+    return queries.championship(year)
+
+
+@app.get("/api/races/{year}")
+def get_races(year: int):
+    """Carreras de una temporada con su podio."""
+    return queries.races(year)
+
+
+@app.get("/api/session/detail")
+def get_session_detail(sid: str = Query(..., description="ID 'año|GP|sesión'")):
+    """Resultados, ritmo, estrategia y speed trap de una sesión."""
+    out = queries.session_detail(sid)
+    if out is None:
+        raise HTTPException(404, f"Sesión no encontrada: {sid}")
+    return out
+
+
+@app.get("/api/h2h")
+def get_h2h(a: str = Query(..., min_length=2, max_length=4),
+            b: str = Query(..., min_length=2, max_length=4)):
+    """Head-to-head histórico: delta de mejor vuelta por GP entre dos pilotos."""
+    return queries.h2h(a.upper(), b.upper())
+
+
+@app.get("/api/drivers")
+def get_drivers():
+    """Pilotos disponibles en la base (para selectores)."""
+    return queries.drivers_index()
+
+
+# La web broadcast se sirve desde el mismo proceso (sin node ni build).
+_WEB = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
+if os.path.isdir(_WEB):
+    app.mount("/", StaticFiles(directory=_WEB, html=True), name="web")
