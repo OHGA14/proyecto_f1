@@ -546,7 +546,7 @@ async function renderPilotos(zone) {
     chipsWrap.appendChild(chip);
   });
   zone.appendChild(chipsCard);
-  drawSessionStats(zone, ss);
+  drawSessionStats(zone, ss, state.telSel);
   drawTelCharts(zone, d);
 }
 
@@ -902,6 +902,7 @@ function drawReplay(zone, d) {
       </div>
       <canvas id="rpCanvas" style="width:100%;display:block;border-radius:10px"></canvas>
       <div id="rpHud" class="replay-hud"></div>
+      <canvas id="rpTele" style="width:100%;display:block;border-radius:10px;margin-top:10px"></canvas>
     </div>
     <div class="chart-summary" style="margin-top:8px">Animación nativa en canvas (60 fps).
       El gap de cada tarjeta es tiempo real contra ${d.ref} en ese punto de la pista.</div>
@@ -926,13 +927,14 @@ function drawReplay(zone, d) {
   const xs = ref.x, ys = ref.y;
   const minX = Math.min(...xs), maxX = Math.max(...xs);
   const minY = Math.min(...ys), maxY = Math.max(...ys);
-  const H = 560;
-  let W = 800, k = 1, ox = 0, oy = 0, dpr = window.devicePixelRatio || 1;
+  let W = 800, H = 560, k = 1, ox = 0, oy = 0, dpr = window.devicePixelRatio || 1;
   const fit = () => {
     W = canvas.clientWidth || 800;
+    const aspecto = (maxY - minY) / (maxX - minX);
+    H = Math.round(Math.min(780, Math.max(420, W * aspecto * 0.96)));
     canvas.width = W * dpr; canvas.height = H * dpr;
     canvas.style.height = H + "px";
-    k = Math.min(W / (maxX - minX), H / (maxY - minY)) * 0.86;
+    k = Math.min(W / (maxX - minX), H / (maxY - minY)) * 0.94;
     ox = (W - (maxX - minX) * k) / 2 - minX * k;
     oy = (H - (maxY - minY) * k) / 2 - minY * k;
   };
@@ -987,6 +989,84 @@ function drawReplay(zone, d) {
   const trails = new Map(cars.map((c) => [c.code, []]));
   let tau = 0, playing = false, last = null, raf = null, arrastrando = false;
 
+  // ── tira de telemetría sincronizada (velocidad / gas / freno / marcha) ──
+  const tele = card.querySelector("#rpTele");
+  const tctx = tele.getContext("2d");
+  const Dmax = Math.max(...cars.map((c) => c.d[c.d.length - 1]));
+  const vMax = Math.max(...cars.map((c) => Math.max(...c.speed))) * 1.05;
+  const BANDS = [
+    { key: "speed", lbl: "VEL",   min: 0,  max: vMax, frac: 0.42 },
+    { key: "throttle", lbl: "GAS", min: 0, max: 105,  frac: 0.20 },
+    { key: "brake", lbl: "FRENO", min: 0,  max: 105,  frac: 0.20 },
+    { key: "gear", lbl: "MARCHA", min: 0.5, max: 8.5, frac: 0.18 },
+  ];
+  const TH = 330, PADL = 56;
+  let TW = 800, teleStatic = null, bandGeo = [];
+  const fitTele = () => {
+    TW = tele.clientWidth || 800;
+    tele.width = TW * dpr; tele.height = TH * dpr;
+    tele.style.height = TH + "px";
+    let y0 = 6;
+    bandGeo = BANDS.map((b) => {
+      const h = (TH - 14) * b.frac;
+      const g = { ...b, y0, y1: y0 + h - 8 };
+      y0 += h;
+      return g;
+    });
+    teleStatic = document.createElement("canvas");
+    teleStatic.width = TW * dpr; teleStatic.height = TH * dpr;
+    const c = teleStatic.getContext("2d");
+    c.scale(dpr, dpr);
+    const px = (dd) => PADL + (dd / Dmax) * (TW - PADL - 10);
+    const py = (g, v) => g.y1 - ((v - g.min) / (g.max - g.min)) * (g.y1 - g.y0);
+    bandGeo.forEach((g) => {
+      c.strokeStyle = "rgba(255,255,255,.07)";
+      c.beginPath(); c.moveTo(PADL, g.y1); c.lineTo(TW - 10, g.y1); c.stroke();
+      c.font = "700 9px Inter, sans-serif";
+      c.fillStyle = "#767c88"; c.textAlign = "left";
+      c.fillText(g.lbl, 8, (g.y0 + g.y1) / 2 + 3);
+      cars.forEach((car) => {
+        c.strokeStyle = car.color; c.globalAlpha = 0.85; c.lineWidth = 1.4;
+        c.beginPath();
+        for (let i = 0; i < car.d.length; i++) {
+          const X = px(car.d[i]), Y = py(g, car[g.key][i]);
+          (i ? c.lineTo(X, Y) : c.moveTo(X, Y));
+        }
+        c.stroke(); c.globalAlpha = 1;
+      });
+    });
+    (d.cuts || []).forEach((x) => {
+      c.strokeStyle = "rgba(255,255,255,.14)";
+      c.beginPath(); c.moveTo(px(x), 4); c.lineTo(px(x), TH - 6); c.stroke();
+    });
+  };
+  const idxAt = (car, dist) => {
+    let lo = 0, hi = car.d.length - 1;
+    if (dist >= car.d[hi]) return hi;
+    while (hi - lo > 1) { const m = (lo + hi) >> 1; (car.d[m] <= dist ? lo = m : hi = m); }
+    return lo;
+  };
+  const drawTele = (estados) => {
+    tctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    tctx.clearRect(0, 0, TW, TH);
+    tctx.drawImage(teleStatic, 0, 0, TW, TH);
+    const px = (dd) => PADL + (dd / Dmax) * (TW - PADL - 10);
+    const py = (g, v) => g.y1 - ((v - g.min) / (g.max - g.min)) * (g.y1 - g.y0);
+    const xRef = px(estados[0].p.dist);
+    tctx.strokeStyle = "rgba(255,255,255,.45)"; tctx.lineWidth = 1;
+    tctx.beginPath(); tctx.moveTo(xRef, 4); tctx.lineTo(xRef, TH - 6); tctx.stroke();
+    estados.forEach(({ c, p }) => {
+      const i = idxAt(c, p.dist), X = px(p.dist);
+      bandGeo.forEach((g) => {
+        tctx.fillStyle = c.color;
+        tctx.beginPath();
+        tctx.arc(X, py(g, c[g.key][i]), 3.6, 0, 7);
+        tctx.fill();
+        tctx.strokeStyle = "#0b0d12"; tctx.lineWidth = 1.4; tctx.stroke();
+      });
+    });
+  };
+
   const frame = () => {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
@@ -1027,6 +1107,7 @@ function drawReplay(zone, d) {
     }).join("");
     lblT.textContent = `${tau.toFixed(1)}s`;
     if (!arrastrando) scrub.value = Math.round((tau / Tmax) * 1000);
+    drawTele(estados);
   };
 
   const loop = (ts) => {
@@ -1050,8 +1131,8 @@ function drawReplay(zone, d) {
     frame();
     arrastrando = false;
   };
-  new ResizeObserver(() => { fit(); buildStatic(); frame(); }).observe(canvas);
-  fit(); buildStatic(); frame();
+  new ResizeObserver(() => { fit(); buildStatic(); fitTele(); frame(); }).observe(canvas);
+  fit(); buildStatic(); fitTele(); frame();
 }
 
 /* ───────────────────────────── RITMO DE SESIÓN (estadística de toda la sesión) */
@@ -1087,9 +1168,44 @@ function timeTicks(vals) {
   return { tickvals: ticks, ticktext: ticks.map(fmtLap) };
 }
 
-function drawSessionStats(zone, ss) {
+function drawSessionStats(zone, ss, sel) {
+  const cont = el(`<div></div>`);
+  zone.appendChild(cont);
+  const render = () => {
+    cont.innerHTML = "";
+    const usarSel = !state.ritmoAll && sel && sel.length;
+    const f = (arr) => (usarSel ? (arr || []).filter((x) => sel.includes(x.code)) : (arr || []));
+    const ss2 = { ...ss, box: f(ss.box), cv: f(ss.cv), evo: f(ss.evo),
+                  deg: f(ss.deg), grid: f(ss.grid) };
+    if (ss.trap && usarSel) {
+      const idx = ss.trap.drivers.map((c, i) => [c, i]).filter(([c]) => sel.includes(c));
+      ss2.trap = idx.length >= 1
+        ? { drivers: idx.map(([c]) => c), laps: ss.trap.laps, z: idx.map(([, i]) => ss.trap.z[i]) }
+        : null;
+    }
+    drawSessionStatsInner(cont, ss2, render);
+  };
+  render();
+}
+
+function drawSessionStatsInner(zone, ss, rerender) {
   zone.appendChild(el(`<div class="section-title" id="sec-ritmo">Ritmo de sesión
     <small> · ${ss.session} · toda la sesión, no solo la vuelta rápida</small></div>`));
+  const tg = el(`<div class="pills" style="margin-bottom:14px">
+    <button class="pill ${!state.ritmoAll ? "active" : ""}">PILOTOS SELECCIONADOS</button>
+    <button class="pill ${state.ritmoAll ? "active" : ""}">TODO EL CAMPO</button></div>`);
+  const [tgA, tgB] = tg.querySelectorAll("button");
+  tgA.onclick = () => { state.ritmoAll = false; rerender(); };
+  tgB.onclick = () => { state.ritmoAll = true; rerender(); };
+  zone.appendChild(tg);
+
+  let sumRitmo = "";
+  if (ss.cv.length) {
+    const rap = [...ss.cv].sort((a, b) => a.median - b.median)[0];
+    const con = ss.cv[0];
+    sumRitmo = `Mejor ritmo mediano: ${rap.code} (${rap.median_label}). Más consistente: ` +
+               `${con.code} (CV ${con.cv.toFixed(2)}%). El más rápido no siempre es el más regular.`;
+  }
 
   // tiles: veredicto
   if (ss.cv.length) {
@@ -1123,7 +1239,7 @@ function drawSessionStats(zone, ss) {
   if (ss.evo.length) {
     const cEvo = chartCard({
       title: "Evolución de tiempos por vuelta", sub: "color del punto = compuesto · ✕ gris = pit/SC/atípica",
-      summary: ss.summaries.ritmo || "",
+      summary: sumRitmo,
       tips: ["<b>¿La línea baja poco a poco?</b> → el coche mejora al quemar combustible; si sube, la goma degrada más de lo que el combustible regala.",
              "<b>¿Escalón hacia abajo tras una ✕?</b> → paró y volvió con goma nueva.",
              "Toca un piloto en la leyenda para aislarlo."],
@@ -1236,8 +1352,9 @@ function drawSessionStats(zone, ss) {
 
   // degradación por stint (tabla con badge)
   if (ss.deg && ss.deg.length) {
+    const peor = [...ss.deg].sort((a, b) => b.slope - a.slope)[0];
     zone.appendChild(el(`<div class="section-title">Degradación por stint
-      <small> · ${ss.summaries.deg || ""}</small></div>`));
+      <small> · Mayor degradación: ${peor.code} en el stint ${peor.stint} (${peor.compound}): +${(peor.slope * 1000).toFixed(0)} ms/vuelta</small></div>`));
     const badge = (sl) => sl < 0 ? ["#3F7BF0", "Mejora"] : sl < 0.05 ? ["#2ECC71", "Excelente"]
       : sl < 0.10 ? ["#FFC400", "Normal"] : ["#FF5252", "Alta"];
     const rows = ss.deg.map((r) => {
@@ -1260,7 +1377,8 @@ function drawSessionStats(zone, ss) {
   if (ss.grid && ss.grid.length) {
     const cGr = chartCard({
       title: "Parrilla → meta", sub: "posiciones ganadas (verde) o perdidas (rojo) respecto a la salida",
-      summary: ss.summaries.grid || "",
+      summary: (ss.grid[0] && ss.grid[0].delta > 0)
+        ? `Mayor remontada del grupo: ${ss.grid[0].code} (P${ss.grid[0].grid} → P${ss.grid[0].pos}, +${ss.grid[0].delta}).` : "",
       tips: ["<b>¿Barra verde larga?</b> → gran remontada: salió atrás y acabó delante.",
              "<b>¿Roja larga?</b> → mal día: problema mecánico, sanción o mala estrategia."],
     });
@@ -1288,7 +1406,10 @@ function drawSessionStats(zone, ss) {
   if (ss.trap) {
     const cTr = chartCard({
       title: "Speed trap por vuelta", sub: "velocidad punta de cada piloto en cada vuelta (km/h)",
-      summary: ss.summaries.trap || "",
+      summary: (() => { let mx = 0, quien = "";
+        ss.trap.drivers.forEach((c, i) => { const v = Math.max(...ss.trap.z[i].filter(Boolean));
+          if (v > mx) { mx = v; quien = c; } });
+        return `Récord del speed trap del grupo: ${mx.toFixed(0)} km/h de ${quien}.`; })(),
       tips: ["<b>¿Una fila que se enfría (azul) al final?</b> → gestionaba o perdió motor/rebufo.",
              "<b>¿Columna entera fría?</b> → vuelta lenta de todos: SC o lluvia.",
              "<b>¿Un punto rojo aislado?</b> → rebufo perfecto o DRS en esa vuelta."],

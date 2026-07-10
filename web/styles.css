@@ -105,8 +105,8 @@ body {
 
 /* ─────────────────────────────────────── layout */
 .view {
-  width: min(1800px, 100% - 64px);
-  margin: 26px auto; flex: 1;
+  width: min(2100px, 100% - 40px);
+  margin: 24px auto; flex: 1;
   animation: fadeup .4s cubic-bezier(.2, .7, .3, 1) both;
 }
 @keyframes fadeup { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; } }
