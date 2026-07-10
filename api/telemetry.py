@@ -232,8 +232,8 @@ def laps_of(sid, code):
     return sorted(out, key=lambda o: o["lap"])
 
 
-def analysis(sid, codes=None):
-    """Modo PILOTOS: vuelta rápida de cada piloto seleccionado."""
+def analysis(sid, codes=None, lap=None):
+    """Modo PILOTOS: vuelta rápida (o la vuelta `lap`) de cada piloto."""
     s = _ready_session(sid)
     if s is None:
         return None
@@ -246,7 +246,7 @@ def analysis(sid, codes=None):
     nombres = {d["code"]: d["name"] for d in disponibles}
     entries = []
     for c in codes:
-        ch = _lap_channels(sid, c)
+        ch = _lap_channels(sid, c, lap)
         if ch is not None:
             entries.append({"key": c, "name": nombres.get(c, c),
                             "color": colores.get(c, "#9aa0aa"), "ch": ch})
@@ -423,6 +423,41 @@ def _assemble(s, entries):
                              "margin": round(margen_s, 3), "cells": celdas})
         micro = {"sectors": sectores, "wins": wins, "keys": keys}
 
+    # sectores: tiempo por sector de cada entrada + ganador y margen
+    sectors = []
+    cuts = ch_ref.get("cuts") or []
+    if len(cuts) >= 2:
+        spans_s = [("S1", 0.0, cuts[0]), ("S2", cuts[0], cuts[1]),
+                   ("S3", cuts[1], d_total)]
+        for lbl, a, b in spans_s:
+            tiempos = {}
+            for k in keys:
+                ch = chans[k]
+                tt = np.interp([a, b], ch["d"], ch["t"])
+                tiempos[k] = round(float(tt[1] - tt[0]), 3)
+            orden_s = sorted(tiempos, key=tiempos.get)
+            margen = (tiempos[orden_s[1]] - tiempos[orden_s[0]]) if len(orden_s) > 1 else 0.0
+            sectors.append({"label": lbl, "d0": round(a), "d1": round(b),
+                            "winner": orden_s[0], "margin": round(margen, 3),
+                            "color": colores.get(orden_s[0], "#9aa0aa")})
+
+    # zonas de alta velocidad de la referencia (>80% de su vmax, tramos >=5%)
+    zones = []
+    v = np.asarray(ch_ref["speed"], dtype=float)
+    alto = v > 0.8 * float(v.max())
+    i = 0
+    while i < len(alto):
+        if alto[i]:
+            j = i
+            while j < len(alto) and alto[j]:
+                j += 1
+            d0, d1 = float(ch_ref["d"][i]), float(ch_ref["d"][min(j, len(alto) - 1)])
+            if (d1 - d0) >= 0.05 * d_total:
+                zones.append({"d0": round(d0), "d1": round(d1)})
+            i = j
+        else:
+            i += 1
+
     # resúmenes calculados (firma de la casa)
     summaries = {}
     rapido = min(drivers, key=lambda d: d["lap_time"] or 9e9)
@@ -457,8 +492,8 @@ def _assemble(s, entries):
 
     return {"ref": ref["key"], "drivers": drivers, "corners": corners,
             "cuts": ch_ref.get("cuts") or [], "segments": segments,
-            "dtw": dtw, "micro": micro, "summaries": summaries,
-            "info": {"total_m": round(d_total)}}
+            "dtw": dtw, "micro": micro, "sectors": sectors, "zones": zones,
+            "summaries": summaries, "info": {"total_m": round(d_total)}}
 
 
 # ────────────────────────────────────────────── estadísticas de sesión (RITMO)
@@ -510,6 +545,7 @@ def session_stats(sid):
             es_pit = (r["PitInTime"] == r["PitInTime"]) or (r["PitOutTime"] == r["PitOutTime"])
             pts.append({"lap": int(r["LapNumber"]), "t": round(float(r["t"]), 3),
                         "comp": str(r.get("Compound", "")).upper(),
+                        "pit": bool(es_pit),
                         "out": bool(es_pit or r["t"] > lim)})
         evo.append({"code": code, "color": colores.get(code), "points": pts})
 
@@ -588,6 +624,56 @@ def session_stats(sid):
                 z.append([float(m[lp]) if lp in m.index else None for lp in lapsx])
             trap = {"drivers": codes_t, "laps": lapsx, "z": z}
 
+    # vueltas bajo SC/VSC (para sombrear la evolución y el lap chart)
+    sc_ranges, run = [], []
+    if "TrackStatus" in df.columns:
+        mask = df["TrackStatus"].astype(str).str.contains("4|6|7", regex=True)
+        for lp in sorted(df[mask]["LapNumber"].dropna().astype(int).unique().tolist()):
+            if run and lp == run[-1] + 1:
+                run.append(lp)
+            else:
+                if run:
+                    sc_ranges.append([run[0], run[-1]])
+                run = [lp]
+        if run:
+            sc_ranges.append([run[0], run[-1]])
+
+    # stints completos (gantt de gestión de neumáticos)
+    stints = []
+    if "Stint" in df.columns:
+        for (code, st), g in df[df["Stint"].notna()].groupby(["Driver", "Stint"]):
+            comp = str(g["Compound"].iloc[0]).upper()
+            stints.append({"code": str(code), "stint": int(st), "compound": comp,
+                           "color": COMPOUND_DISPLAY.get(comp, "#6b7280"),
+                           "from": int(g["LapNumber"].min()),
+                           "to": int(g["LapNumber"].max())})
+
+    # posición vuelta a vuelta + gap al líder (carrera)
+    positions, gaps = [], []
+    if tipo == "race":
+        if "Position" in df.columns:
+            posdf = df[df["Position"].notna()]
+            for code in orden:
+                g = posdf[posdf["Driver"] == code].sort_values("LapNumber")
+                if g.empty:
+                    continue
+                positions.append({"code": code, "color": colores.get(code),
+                                  "laps": g["LapNumber"].astype(int).tolist(),
+                                  "pos": g["Position"].astype(int).tolist()})
+        piv = df[df["t"].notna()].pivot_table(index="LapNumber", columns="Driver",
+                                              values="t", aggfunc="first")
+        if len(piv):
+            cum = piv.cumsum()
+            lider = cum.min(axis=1)
+            gapdf = cum.sub(lider, axis=0)
+            for code in orden:
+                if code not in gapdf.columns:
+                    continue
+                serie = gapdf[code].dropna()
+                gaps.append({"code": code, "color": colores.get(code),
+                             "laps": serie.index.astype(int).tolist(),
+                             "gap": serie.round(2).tolist()})
+
     summaries = {}
     if cv:
         rapido = min(cv, key=lambda x: x["median"])
@@ -619,4 +705,31 @@ def session_stats(sid):
 
     return {"type": tipo, "session": name, "n_laps": n_laps, "box": box,
             "cv": sorted(cv, key=lambda x: x["cv"]), "evo": evo, "deg": deg,
-            "grid": gridfin, "quali": quali, "trap": trap, "summaries": summaries}
+            "grid": gridfin, "quali": quali, "trap": trap,
+            "sc_ranges": sc_ranges, "stints": stints,
+            "positions": positions, "gaps": gaps, "summaries": summaries}
+
+
+def schedule(year):
+    """Calendario del año (FastF1): GPs con sus sesiones, para los selectores."""
+    ff1.Cache.enable_cache(CACHE_DIR)
+    try:
+        ev = ff1.get_event_schedule(year, include_testing=False)
+    except Exception as e:
+        return {"year": year, "events": [], "error": f"{type(e).__name__}: {e}"}
+    cacheados = {c["sid"] for c in catalog()}
+    events = []
+    for _, r in ev.iterrows():
+        gp = str(r["EventName"])
+        sesiones = []
+        for i in range(1, 6):
+            nom = r.get(f"Session{i}")
+            if nom is None or nom != nom or not str(nom).strip():
+                continue
+            nom = str(nom)
+            sesiones.append({"session": nom,
+                             "cached": session_id(year, gp, nom) in cacheados})
+        if sesiones:
+            events.append({"gp": gp, "round": int(r["RoundNumber"]),
+                           "sessions": sesiones})
+    return {"year": year, "events": events}

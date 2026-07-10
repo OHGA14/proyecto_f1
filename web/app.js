@@ -22,7 +22,12 @@ const fmtLap = (s) => {
   return `${m}:${(s - m * 60).toFixed(3).padStart(6, "0")}`;
 };
 
-const PLOTLY_CFG = { displayModeBar: false, responsive: true };
+const PLOTLY_CFG = {
+  displayModeBar: true, displaylogo: false, responsive: true,
+  modeBarButtonsToRemove: ["lasso2d", "select2d", "autoScale2d", "toggleSpikelines",
+                           "hoverClosestCartesian", "hoverCompareCartesian"],
+  doubleClick: "reset",
+};
 
 const baseLayout = (extra = {}) => ({
   paper_bgcolor: "rgba(0,0,0,0)",
@@ -136,6 +141,45 @@ async function viewTemporada() {
     <thead><tr><th class="num">#</th><th>Piloto</th><th>Equipo</th>
     <th class="num">Pts</th><th></th><th class="num">Vict.</th><th class="num">Podios</th></tr></thead>
     <tbody>${rows}</tbody></table></div>`));
+
+  // ritmo puro por GP + récords de speed trap (histórico)
+  const [hp, tr] = await Promise.all([
+    api(`/historic/pace/${state.year}`), api(`/historic/trap/${state.year}`),
+  ]);
+  if (hp.drivers && hp.drivers.length) {
+    $view.appendChild(el(`<div style="height:20px"></div>`));
+    const cHp = chartCard({
+      title: `Ritmo puro por GP · ${state.year}`,
+      sub: "% sobre la mejor vuelta de cada carrera · 0% = hizo LA vuelta del GP",
+      summary: hp.summary || "",
+      tips: ["<b>¿Una línea toca el 0%?</b> → ese piloto hizo la vuelta más rápida de esa carrera.",
+             "<b>¿Plana y baja todo el año?</b> → ritmo de élite constante, sin importar el circuito."],
+    });
+    $view.appendChild(cHp.card);
+    Plotly.newPlot(cHp.plot, hp.drivers.map((x) => ({
+      type: "scatter", mode: "lines+markers", name: x.code,
+      x: hp.gps, y: x.pct, connectgaps: true,
+      line: { color: x.color, width: 2 }, marker: { size: 6 },
+      hovertemplate: `<b>${x.code}</b> · %{x}<br>+%{y:.2f}%<extra></extra>`,
+    })), baseLayout({
+      height: 480, hovermode: "x unified",
+      margin: { l: 58, r: 16, t: 14, b: 60 },
+      xaxis: { ...baseLayout().xaxis, tickangle: -35, tickfont: { size: 10 } },
+      yaxis: { ...baseLayout().yaxis, title: { text: "% SOBRE LA MEJOR", font: { size: 10 } },
+               ticksuffix: "%", zeroline: true, zerolinecolor: "rgba(255,45,45,.5)" },
+      legend: { orientation: "h", y: -0.22, font: { size: 10.5 } },
+    }), PLOTLY_CFG);
+  }
+  if (tr && tr.length) {
+    $view.appendChild(el(`<div style="height:20px"></div>`));
+    $view.appendChild(el(`<div class="section-title">Récord de speed trap por GP</div>`));
+    const trRows = tr.map((r) => `<tr><td>${r.gp}</td>
+      <td>${drvChip(r.code, r.color)}</td>
+      <td class="num"><b>${r.vmax.toFixed(0)}</b> km/h</td></tr>`).join("");
+    $view.appendChild(el(`<div class="card table-wrap"><table>
+      <thead><tr><th>GP</th><th>Piloto</th><th class="num">Vel. punta</th></tr></thead>
+      <tbody>${trRows}</tbody></table></div>`));
+  }
 }
 
 /* ───────────────────────────── vista CARRERA */
@@ -433,34 +477,71 @@ async function viewAnalisis() {
   const cat = await api("/telemetry/catalog");
   $view.innerHTML = "";
 
-  if (!cat.length) {
-    $view.appendChild(el(`<div class="empty">No hay sesiones con telemetría en la caché de FastF1.
-      Carga una sesión en el laboratorio primero.</div>`));
-    return;
+  state.schedCache = state.schedCache || {};
+  const years = [...new Set([2026, 2025, 2024, 2023, ...cat.map((c) => c.year)])]
+    .sort((a, b) => b - a);
+  if (!state.telYear) {
+    const ready = cat.find((c) => c.status === "ready") || cat[cat.length - 1];
+    if (ready) { state.telYear = ready.year; state.telGp = ready.gp; state.telSes = ready.session; }
+    else state.telYear = years[0];
   }
-  const ready = cat.find((c) => c.status === "ready");
-  if (!state.tsid || !cat.some((c) => c.sid === state.tsid))
-    state.tsid = (ready || cat[cat.length - 1]).sid;
 
-  const opts = cat.map((c) => `<option value="${c.sid}" ${c.sid === state.tsid ? "selected" : ""}>
-      ${c.year} · ${c.gp} · ${c.session}${c.status === "ready" ? " ●" : ""}</option>`).join("");
   const controls = el(`<div class="card analysis-controls" style="margin-bottom:18px">
-    <select id="selSes" style="max-width:430px">${opts}</select>
+    <select id="selYear">${years.map((y) =>
+      `<option ${y === state.telYear ? "selected" : ""}>${y}</option>`).join("")}</select>
+    <select id="selGp" style="min-width:250px"><option>cargando…</option></select>
+    <select id="selSes2" style="min-width:160px"></select>
     <button class="btn-red" id="btnLoad">ANALIZAR</button>
-    <span style="font-size:11.5px;color:var(--ink3)">Vuelta rápida por piloto ·
-      la 1ª carga de una sesión tarda ~1 min, luego es instantáneo (●&nbsp;=&nbsp;ya en memoria)</span>
+    <button class="swap" id="btnRefresh" style="transform:none" title="Recarga el calendario y el catálogo — útil justo después de un GP">⟳ BUSCAR NUEVOS</button>
+    <span style="font-size:11.5px;color:var(--ink3)">● = ya descargada (instantánea) · sin ● la baja de internet (~1-2 min)</span>
   </div>`);
   $view.appendChild(controls);
   const zone = el(`<div></div>`);
   $view.appendChild(zone);
+  const selYear = controls.querySelector("#selYear");
+  const selGp = controls.querySelector("#selGp");
+  const selSes = controls.querySelector("#selSes2");
 
-  controls.querySelector("#selSes").onchange = (e) => { state.tsid = e.target.value; state.telSel = null; };
-  controls.querySelector("#btnLoad").onclick = () => beginAnalysis(zone);
+  const fillSes = (evs) => {
+    const ev = evs.find((e) => e.gp === state.telGp) || evs[evs.length - 1];
+    if (!ev) { selSes.innerHTML = ""; return; }
+    state.telGp = ev.gp;
+    if (!ev.sessions.some((x) => x.session === state.telSes))
+      state.telSes = (ev.sessions.find((x) => x.session === "Race") || ev.sessions[ev.sessions.length - 1]).session;
+    selSes.innerHTML = ev.sessions.map((x) =>
+      `<option value="${x.session}" ${x.session === state.telSes ? "selected" : ""}>${x.session}${x.cached ? " ●" : ""}</option>`).join("");
+  };
+  const fillGp = async () => {
+    selGp.innerHTML = "<option>cargando…</option>";
+    if (!state.schedCache[state.telYear])
+      state.schedCache[state.telYear] = await api(`/telemetry/schedule?year=${state.telYear}`);
+    const evs = state.schedCache[state.telYear].events || [];
+    if (!evs.length) { selGp.innerHTML = "<option>sin calendario</option>"; selSes.innerHTML = ""; return; }
+    if (!evs.some((e) => e.gp === state.telGp)) {
+      const conCache = [...evs].reverse().find((e) => e.sessions.some((x) => x.cached));
+      state.telGp = (conCache || evs[evs.length - 1]).gp;
+    }
+    selGp.innerHTML = evs.map((e) =>
+      `<option value="${e.gp}" ${e.gp === state.telGp ? "selected" : ""}>R${e.round} · ${e.gp.replace(" Grand Prix", "")}${e.sessions.some((x) => x.cached) ? " ●" : ""}</option>`).join("");
+    fillSes(evs);
+  };
+  selYear.onchange = () => { state.telYear = +selYear.value; state.telGp = null; state.telSes = null; fillGp(); };
+  selGp.onchange = () => { state.telGp = selGp.value; state.telSes = null; fillSes(state.schedCache[state.telYear].events); };
+  selSes.onchange = () => { state.telSes = selSes.value; };
+  controls.querySelector("#btnLoad").onclick = () => {
+    state.tsid = `${state.telYear}|${state.telGp}|${state.telSes}`;
+    state.telSel = null;
+    beginAnalysis(zone);
+  };
+  controls.querySelector("#btnRefresh").onclick = () => { state.schedCache = {}; viewAnalisis(); };
+  await fillGp();
 
-  const st = await api(`/telemetry/status?sid=${encodeURIComponent(state.tsid)}`);
-  if (st.status === "ready") renderAnalysis(zone);
-  else if (st.status === "loading") beginAnalysis(zone);
-  else zone.appendChild(el(`<div class="empty">Elige una sesión y pulsa <b>ANALIZAR</b>.</div>`));
+  if (state.tsid) {
+    const st = await api(`/telemetry/status?sid=${encodeURIComponent(state.tsid)}`);
+    if (st.status === "ready") return renderAnalysis(zone);
+    if (st.status === "loading") return beginAnalysis(zone);
+  }
+  zone.appendChild(el(`<div class="empty">Elige año, Gran Premio y sesión, y pulsa <b>ANALIZAR</b>.</div>`));
 }
 
 async function beginAnalysis(zone) {
@@ -506,7 +587,8 @@ async function renderAnalysis(zone) {
 async function renderPilotos(zone) {
   zone.innerHTML = "";
   zone.appendChild(el(`<div class="skeleton-block" style="height:380px"></div>`));
-  const q = state.telSel && state.telSel.length ? `&drivers=${state.telSel.join(",")}` : "";
+  const q = (state.telSel && state.telSel.length ? `&drivers=${state.telSel.join(",")}` : "")
+          + (state.telLap ? `&lap=${state.telLap}` : "");
   const [d, ss] = await Promise.all([
     api(`/telemetry/analysis?sid=${encodeURIComponent(state.tsid)}${q}`),
     api(`/telemetry/sessionstats?sid=${encodeURIComponent(state.tsid)}`),
@@ -527,9 +609,33 @@ async function renderPilotos(zone) {
   zone.appendChild(secNav);
 
   const chipsCard = el(`<div class="card" style="margin-bottom:18px">
-    <div style="font-size:10px;letter-spacing:2px;color:var(--ink3);font-weight:700;margin-bottom:10px">
-      PILOTOS · el primero es la referencia del delta y del mapa</div>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">
+      <span style="font-size:10px;letter-spacing:2px;color:var(--ink3);font-weight:700">
+        PILOTOS · el primero es la referencia del delta y del mapa</span>
+      <span style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        <button class="pill" data-top="3">TOP 3</button>
+        <button class="pill" data-top="5">TOP 5</button>
+        <button class="pill" data-top="10">TOP 10</button>
+        <select id="lapMode" style="padding:6px 30px 6px 10px;font-size:12px">
+          <option value="">VUELTA RÁPIDA</option><option value="n">VUELTA Nº…</option></select>
+        <input type="number" id="lapN" min="1" placeholder="nº" style="width:70px;display:${state.telLap ? "" : "none"};background:var(--card2);color:var(--ink);border:1px solid var(--border);border-radius:8px;padding:7px 8px;font:inherit">
+      </span></div>
     <div class="drv-chips"></div></div>`);
+  chipsCard.querySelectorAll("[data-top]").forEach((b) => {
+    b.onclick = () => {
+      state.telSel = (d.available || []).slice(0, +b.dataset.top).map((x) => x.code);
+      renderPilotos(zone);
+    };
+  });
+  const lapMode = chipsCard.querySelector("#lapMode");
+  const lapN = chipsCard.querySelector("#lapN");
+  lapMode.value = state.telLap ? "n" : "";
+  if (state.telLap) lapN.value = state.telLap;
+  lapMode.onchange = () => {
+    if (lapMode.value === "n") { lapN.style.display = ""; lapN.focus(); }
+    else { state.telLap = null; renderPilotos(zone); }
+  };
+  lapN.onchange = () => { state.telLap = +lapN.value || null; renderPilotos(zone); };
   const chipsWrap = chipsCard.querySelector(".drv-chips");
   (d.available || []).forEach((a) => {
     const on = state.telSel.includes(a.code);
@@ -609,6 +715,20 @@ function drawTelCharts(zone, d) {
     type: "line", x0: x, x1: x, yref: "paper", y0: 0, y1: 1,
     line: { color: "rgba(255,255,255,.22)", width: 1 },
   }));
+  const sectorAnnots = (d.cuts || []).map((x, i) => ({
+    x, yref: "paper", y: 1.045, text: `S${i + 2}`, showarrow: false,
+    font: { size: 10, color: "#8a919e" },
+  }));
+  const winnerAnnots = (d.sectors || []).map((sc) => ({
+    x: (sc.d0 + sc.d1) / 2, yref: "paper", y: 1.1, showarrow: false,
+    text: `${sc.label}: ${sc.winner} +${sc.margin.toFixed(3)}`,
+    font: { size: 10.5, color: sc.color },
+  }));
+  const zoneAnnots = (d.zones || []).map((z) => ({
+    x: (z.d0 + z.d1) / 2, yref: "paper", y: 0.99, showarrow: false,
+    text: "ALTA VEL", font: { size: 9, color: "#2ECC71" },
+  }));
+  const DASHES = ["solid", "dash", "dot", "longdash", "dashdot"];
   const lapLabels = d.drivers.map((x) => `${x.code} ${x.lap_label} (V${x.lap_number})`).join(" · ");
 
   zone.appendChild(el(`<div class="section-title" id="sec-tel">Telemetría de vuelta</div>`));
@@ -698,19 +818,21 @@ function drawTelCharts(zone, d) {
 
   // VELOCIDAD
   const cVel = chartCard({
-    title: "Velocidad", sub: lapLabels, summary: d.summaries.speed || "",
+    title: "Velocidad (línea sólida = referencia, guiones = siguientes)",
+    sub: lapLabels, summary: d.summaries.speed || "",
     tips: ["<b>¿Una línea llega más alto en recta?</b> → menos ala o mejor tracción a la salida de la curva previa.",
            "<b>¿Valle más estrecho en una curva?</b> → frena más tarde y suelta antes: ahí gana el tiempo.",
            "Las líneas verticales tenues separan los sectores S1/S2/S3."],
   });
   zone.appendChild(cVel.card);
-  Plotly.newPlot(cVel.plot, d.drivers.map((x) => ({
+  Plotly.newPlot(cVel.plot, d.drivers.map((x, i) => ({
     type: "scatter", mode: "lines", name: x.code, x: x.d, y: x.speed,
-    line: { color: x.color, width: 1.9 },
+    line: { color: x.color, width: 1.9, dash: DASHES[i % DASHES.length] },
     hovertemplate: `<b>${x.code}</b> · %{y:.0f} km/h<extra></extra>`,
   })), baseLayout({
-    height: 580, hovermode: "x unified", shapes: sectorShapes,
-    margin: { l: 56, r: 14, t: 14, b: 48 },
+    height: 600, hovermode: "x unified", shapes: sectorShapes,
+    annotations: [...sectorAnnots, ...winnerAnnots, ...zoneAnnots],
+    margin: { l: 56, r: 14, t: 42, b: 48 },
     xaxis: { ...baseLayout().xaxis, ...cornerAxis },
     yaxis: { ...baseLayout().yaxis, title: { text: "KM/H", font: { size: 10 } } },
     legend: { orientation: "h", y: 1.08, x: 1, xanchor: "right" },
@@ -733,8 +855,9 @@ function drawTelCharts(zone, d) {
       line: { color: x.color, width: 2 },
       hovertemplate: `<b>${x.code}</b> · Δ %{y:+.3f}s<extra></extra>`,
     })), baseLayout({
-      height: 480, hovermode: "x unified", shapes: sectorShapes,
-      margin: { l: 56, r: 14, t: 14, b: 48 },
+      height: 500, hovermode: "x unified", shapes: sectorShapes,
+      annotations: sectorAnnots,
+      margin: { l: 56, r: 14, t: 30, b: 48 },
       xaxis: { ...baseLayout().xaxis, ...cornerAxis },
       yaxis: { ...baseLayout().yaxis, title: { text: `SEGUNDOS VS ${d.ref}`, font: { size: 10 } },
                zeroline: true, zerolinecolor: "rgba(255,45,45,.5)", zerolinewidth: 1.5 },
@@ -1097,6 +1220,43 @@ function drawReplay(zone, d) {
       ctx.fillStyle = c.color;
       ctx.fillText(c.code, X, Y - 13);
     });
+    // CLOSE-UP: cámara con zoom sobre los dos primeros fantasmas
+    if (cars.length >= 2) {
+      const pw = Math.min(360, W * 0.32), ph = Math.round(pw * 0.62);
+      const px0 = W - pw - 14, py0 = 14;
+      const a = estados[0].p, b = estados[1].p;
+      const cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
+      const sep = Math.hypot(a.x - b.x, a.y - b.y);
+      const k2 = Math.min(4 * k, (pw * 0.6) / Math.max(sep, 30));
+      const S = (x, y) => [px0 + pw / 2 + (x - cx) * k2, py0 + ph / 2 - (y - cy) * k2];
+      ctx.save();
+      ctx.beginPath(); ctx.roundRect(px0, py0, pw, ph, 10); ctx.clip();
+      ctx.fillStyle = "rgba(10,12,17,.96)"; ctx.fillRect(px0, py0, pw, ph);
+      ctx.strokeStyle = "rgba(255,255,255,.1)";
+      ctx.lineWidth = Math.max(10, (k2 / k) * 5);
+      ctx.lineJoin = ctx.lineCap = "round";
+      ctx.beginPath();
+      for (let i = 0; i < xs.length; i++) {
+        const [X2, Y2] = S(xs[i], ys[i]);
+        (i ? ctx.lineTo(X2, Y2) : ctx.moveTo(X2, Y2));
+      }
+      ctx.stroke();
+      estados.slice(0, 2).forEach(({ c, p }) => {
+        const [X2, Y2] = S(p.x, p.y);
+        ctx.shadowColor = c.color; ctx.shadowBlur = 12;
+        ctx.fillStyle = c.color;
+        ctx.beginPath(); ctx.arc(X2, Y2, 9, 0, 7); ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.font = "800 10px Inter, sans-serif"; ctx.textAlign = "center";
+        ctx.fillStyle = "#0b0d12"; ctx.fillText(c.code[0], X2, Y2 + 3.5);
+      });
+      ctx.restore();
+      ctx.strokeStyle = "rgba(255,255,255,.18)"; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.roundRect(px0, py0, pw, ph, 10); ctx.stroke();
+      ctx.font = "700 9px Inter, sans-serif"; ctx.fillStyle = "#8a919e";
+      ctx.textAlign = "left";
+      ctx.fillText("CLOSE-UP", px0 + 10, py0 + 16);
+    }
     // HUD
     hud.innerHTML = estados.map(({ c, p }) => {
       const g = gapVsRef(c, tau, p.dist);
@@ -1176,7 +1336,8 @@ function drawSessionStats(zone, ss, sel) {
     const usarSel = !state.ritmoAll && sel && sel.length;
     const f = (arr) => (usarSel ? (arr || []).filter((x) => sel.includes(x.code)) : (arr || []));
     const ss2 = { ...ss, box: f(ss.box), cv: f(ss.cv), evo: f(ss.evo),
-                  deg: f(ss.deg), grid: f(ss.grid) };
+                  deg: f(ss.deg), grid: f(ss.grid), stints: f(ss.stints),
+                  positions: f(ss.positions), gaps: f(ss.gaps) };
     if (ss.trap && usarSel) {
       const idx = ss.trap.drivers.map((c, i) => [c, i]).filter(([c]) => sel.includes(c));
       ss2.trap = idx.length >= 1
@@ -1244,34 +1405,107 @@ function drawSessionStatsInner(zone, ss, rerender) {
              "<b>¿Escalón hacia abajo tras una ✕?</b> → paró y volvió con goma nueva.",
              "Toca un piloto en la leyenda para aislarlo."],
       legendHtml: `<div class="compound-legend">${Object.entries(COMP_COLORS).map(([k, v]) =>
-        `<span class="chip" style="--cc:${v}"><i></i>${k}</span>`).join("")}</div>`,
+        `<span class="chip" style="--cc:${v}"><i></i>${k}</span>`).join("")}
+        <span class="chip" style="--cc:#5b616d"><i></i>✕ atípica</span>
+        <span class="chip" style="--cc:#fff"><i></i>◆ pit</span>
+        <button class="pill" id="evoTgl" style="margin-left:auto">${state.evoOut === false ? "MOSTRAR" : "OCULTAR"} ATÍPICAS</button></div>`,
     });
     zone.appendChild(cEvo.card);
-    zone.appendChild(el(`<div style="height:18px"></div>`));
+    zone.appendChild(el(`<div style="height:20px"></div>`));
+    cEvo.card.querySelector("#evoTgl").onclick = () => {
+      state.evoOut = state.evoOut === false;
+      rerender();
+    };
     const traces = [];
     const outX = [], outY = [];
+    const pitX = [], pitY = [], pitC = [];
     ss.evo.forEach((e) => {
       const limpio = e.points.filter((p) => !p.out);
       traces.push({ type: "scatter", mode: "lines+markers", name: e.code,
         x: limpio.map((p) => p.lap), y: limpio.map((p) => p.t),
         line: { color: e.color, width: 1.7 },
-        marker: { size: 5.5, color: limpio.map((p) => COMP_COLORS[p.comp] || e.color),
+        marker: { size: 6, color: limpio.map((p) => COMP_COLORS[p.comp] || e.color),
                   line: { color: "#11141b", width: 1 } },
         customdata: limpio.map((p) => [fmtLap(p.t), p.comp]),
         hovertemplate: `<b>${e.code}</b> · V%{x}<br>%{customdata[0]} · %{customdata[1]}<extra></extra>` });
       e.points.filter((p) => p.out).forEach((p) => { outX.push(p.lap); outY.push(p.t); });
+      e.points.filter((p) => p.pit).forEach((p) => { pitX.push(p.lap); pitY.push(p.t); pitC.push(e.color); });
     });
-    if (outX.length) traces.push({ type: "scatter", mode: "markers", name: "Atípicas",
-      x: outX, y: outY, marker: { symbol: "x-thin-open", size: 6, color: "#5b616d" },
-      hoverinfo: "skip" });
-    const tt = timeTicks(traces.flatMap((t) => t.y).filter((v) => v != null));
+    if (state.evoOut !== false && outX.length)
+      traces.push({ type: "scatter", mode: "markers", name: "Atípicas",
+        x: outX, y: outY, marker: { symbol: "x-thin-open", size: 6, color: "#5b616d" },
+        hoverinfo: "skip" });
+    if (pitX.length)
+      traces.push({ type: "scatter", mode: "markers", name: "Pit",
+        x: pitX, y: pitY, marker: { symbol: "diamond", size: 7, color: pitC,
+        line: { color: "#fff", width: 1 } },
+        hovertemplate: "PIT · V%{x}<extra></extra>" });
+    const visibles = traces.flatMap((t) => (t.name === "Atípicas" || t.name === "Pit")
+      ? (state.evoOut !== false ? t.y : []) : t.y).filter((v) => v != null);
+    const tt = timeTicks(visibles.length ? visibles : [60, 120]);
+    const scShapesEvo = (ss.sc_ranges || []).map(([l0, l1]) => ({
+      type: "rect", x0: l0 - 0.5, x1: l1 + 0.5, yref: "paper", y0: 0, y1: 1,
+      fillcolor: "rgba(255,196,0,.07)", line: { width: 0 }, layer: "below" }));
     Plotly.newPlot(cEvo.plot, traces, baseLayout({
-      height: 520, hovermode: "closest",
-      margin: { l: 64, r: 14, t: 14, b: 44 },
+      height: 560, hovermode: "closest", shapes: scShapesEvo,
+      annotations: (ss.sc_ranges || []).map(([l0, l1]) => ({
+        x: (l0 + l1) / 2, yref: "paper", y: 1.03, text: "SC/VSC", showarrow: false,
+        font: { size: 9, color: "#FFC400" } })),
+      margin: { l: 64, r: 14, t: 30, b: 44 },
       xaxis: { ...baseLayout().xaxis, title: { text: "VUELTA", font: { size: 10 } } },
       yaxis: { ...baseLayout().yaxis, ...tt },
       legend: { orientation: "h", y: -0.12, font: { size: 10.5 } },
     }), PLOTLY_CFG);
+  }
+
+  // LAP CHART + GAP AL LÍDER (carrera)
+  if (ss.positions && ss.positions.length) {
+    const scShapesLap = (ss.sc_ranges || []).map(([l0, l1]) => ({
+      type: "rect", x0: l0 - 0.5, x1: l1 + 0.5, yref: "paper", y0: 0, y1: 1,
+      fillcolor: "rgba(255,196,0,.07)", line: { width: 0 }, layer: "below" }));
+    const cLp = chartCard({
+      title: "Lap chart · posición vuelta a vuelta", sub: "bandas amarillas = SC/VSC",
+      tips: ["<b>¿Cae varias posiciones de golpe?</b> → pit stop; mira si las recupera.",
+             "<b>¿Cruces constantes?</b> → batalla real en pista."],
+    });
+    zone.appendChild(cLp.card);
+    zone.appendChild(el(`<div style="height:20px"></div>`));
+    Plotly.newPlot(cLp.plot, ss.positions.map((x) => ({
+      type: "scatter", mode: "lines", name: x.code, x: x.laps, y: x.pos,
+      line: { color: x.color, width: 2 },
+      hovertemplate: `<b>${x.code}</b> · V%{x} · P%{y}<extra></extra>`,
+    })), baseLayout({
+      height: 560, shapes: scShapesLap,
+      margin: { l: 46, r: 14, t: 14, b: 44 },
+      xaxis: { ...baseLayout().xaxis, title: { text: "VUELTA", font: { size: 10 } } },
+      yaxis: { ...baseLayout().yaxis, title: { text: "POSICIÓN", font: { size: 10 } },
+               autorange: "reversed", dtick: 1 },
+      legend: { orientation: "h", y: -0.1, font: { size: 10.5 } },
+    }), PLOTLY_CFG);
+
+    if (ss.gaps && ss.gaps.length) {
+      const flat = ss.gaps.flatMap((g) => g.gap).sort((a, b) => a - b);
+      const cap = flat[Math.floor(flat.length * 0.93)] || 60;
+      const cGp = chartCard({
+        title: "Gap al líder", sub: "segundos detrás del primero",
+        tips: ["<b>¿Se comprimen todas las líneas?</b> → coche de seguridad: el pelotón se reagrupa.",
+               "<b>¿Escalón de ~20s hacia arriba?</b> → pit stop."],
+      });
+      zone.appendChild(cGp.card);
+      zone.appendChild(el(`<div style="height:20px"></div>`));
+      Plotly.newPlot(cGp.plot, ss.gaps.map((x) => ({
+        type: "scatter", mode: "lines", name: x.code, x: x.laps, y: x.gap,
+        line: { color: x.color, width: 2 },
+        hovertemplate: `<b>${x.code}</b> · V%{x}<br>+%{y:.1f}s<extra></extra>`,
+      })), baseLayout({
+        height: 520, shapes: scShapesLap,
+        margin: { l: 52, r: 14, t: 14, b: 44 },
+        xaxis: { ...baseLayout().xaxis, title: { text: "VUELTA", font: { size: 10 } } },
+        yaxis: { ...baseLayout().yaxis, title: { text: "SEGUNDOS TRAS EL LÍDER", font: { size: 10 } },
+                 range: [cap, -2] },
+        legend: { orientation: "h", y: -0.1, font: { size: 10.5 } },
+      }), PLOTLY_CFG);
+    }
   }
 
   // fila: boxplot + tabla de consistencia
@@ -1312,6 +1546,21 @@ function drawSessionStatsInner(zone, ss, rerender) {
       <tbody>${rows}</tbody></table></div>`));
   }
 
+  // RESUMEN DE RITMO: tarjetas por piloto (vueltas limpias)
+  if (ss.cv.length) {
+    const mejor = Math.min(...ss.cv.map((r) => r.median));
+    zone.appendChild(el(`<div class="section-title">Resumen de ritmo
+      <small> · vueltas limpias por piloto (sin pits ni atípicas)</small></div>`));
+    const cards = [...ss.cv].sort((a, b) => a.median - b.median).map((r) => `
+      <div class="card tile" style="--tc:${r.color}">
+        <div class="label">${r.code}</div>
+        <div class="value" style="font-size:23px">${r.median_label}</div>
+        <div class="hint">${r.median === mejor ? "MEJOR RITMO" : `+${(r.median - mejor).toFixed(3)}s vs mejor`}
+          · ${r.laps} vueltas<br>σ ${r.sigma.toFixed(3)} · IQR ${r.iqr.toFixed(3)}</div>
+      </div>`).join("");
+    zone.appendChild(el(`<div class="tiles" style="margin-bottom:20px">${cards}</div>`));
+  }
+
   // ritmo corregido por combustible (solo carrera) con slider
   if (ss.type === "race" && ss.evo.length) {
     const cFuel = chartCard({
@@ -1350,11 +1599,77 @@ function drawSessionStatsInner(zone, ss, rerender) {
     zone.appendChild(el(`<div style="height:18px"></div>`));
   }
 
-  // degradación por stint (tabla con badge)
+  // GESTIÓN DE NEUMÁTICOS: gantt de stints
+  if (ss.stints && ss.stints.length) {
+    const orden = [...new Set(ss.stints.map((x) => x.code))];
+    const cGt = chartCard({
+      title: "Gestión de neumáticos", sub: "stints por piloto · color = compuesto",
+      tips: ["<b>¿Un bloque más largo que los vecinos?</b> → estiró el stint: posible overcut.",
+             "<b>¿Paró antes que su rival?</b> → intento de undercut."],
+      legendHtml: `<div class="compound-legend">${Object.entries(COMP_COLORS).map(([k, v]) =>
+        `<span class="chip" style="--cc:${v}"><i></i>${k}</span>`).join("")}</div>`,
+    });
+    zone.appendChild(cGt.card);
+    zone.appendChild(el(`<div style="height:20px"></div>`));
+    Plotly.newPlot(cGt.plot, ss.stints.map((st) => ({
+      type: "bar", orientation: "h", y: [st.code], base: [st.from - 1],
+      x: [st.to - st.from + 1], showlegend: false,
+      marker: { color: st.color, line: { color: "#11141b", width: 2 } },
+      hovertemplate: `<b>${st.code}</b> · ${st.compound}<br>V${st.from}–V${st.to}<extra></extra>`,
+    })), baseLayout({
+      height: Math.max(300, orden.length * 34 + 120), barmode: "stack", bargap: 0.35,
+      margin: { l: 52, r: 16, t: 14, b: 44 },
+      xaxis: { ...baseLayout().xaxis, title: { text: "VUELTA", font: { size: 10 } } },
+      yaxis: { ...baseLayout().yaxis, categoryorder: "array",
+               categoryarray: [...orden].reverse(), gridcolor: "rgba(0,0,0,0)" },
+    }), PLOTLY_CFG);
+  }
+
+  // degradación por stint: filtro de compuesto + gráfica + tabla
   if (ss.deg && ss.deg.length) {
+    const comps = [...new Set(ss.deg.map((r) => r.compound))];
+    const degSel = state.compFilter && comps.includes(state.compFilter)
+      ? ss.deg.filter((r) => r.compound === state.compFilter) : ss.deg;
+    const fpills = `<div class="pills" style="margin-bottom:14px">
+      <button class="pill ${!state.compFilter ? "active" : ""}" data-c="">TODAS</button>
+      ${comps.map((c) => `<button class="pill ${state.compFilter === c ? "active" : ""}"
+        data-c="${c}" style="--cc:${COMP_COLORS[c] || "#6b7280"}">${c}</button>`).join("")}</div>`;
+    ss.deg = degSel;
     const peor = [...ss.deg].sort((a, b) => b.slope - a.slope)[0];
-    zone.appendChild(el(`<div class="section-title">Degradación por stint
+    zone.appendChild(el(`<div class="section-title">Análisis de stint y degradación
       <small> · Mayor degradación: ${peor.code} en el stint ${peor.stint} (${peor.compound}): +${(peor.slope * 1000).toFixed(0)} ms/vuelta</small></div>`));
+    const pillsEl = el(fpills);
+    pillsEl.querySelectorAll("[data-c]").forEach((b) => {
+      b.onclick = () => { state.compFilter = b.dataset.c || null; rerender(); };
+    });
+    zone.appendChild(pillsEl);
+
+    // ritmo mediano por stint (marcador = compuesto, línea = piloto)
+    const cSt = chartCard({
+      title: "Ritmo mediano por stint", sub: "cada punto = un stint · color del punto = compuesto",
+      tips: ["<b>¿El punto siguiente más abajo?</b> → mejoró con la goma nueva o el coche más ligero.",
+             "<b>¿Puntos del mismo compuesto a alturas distintas entre pilotos?</b> → gestión, no goma."],
+    });
+    zone.appendChild(cSt.card);
+    zone.appendChild(el(`<div style="height:20px"></div>`));
+    const porPiloto = {};
+    degSel.forEach((r) => { (porPiloto[r.code] = porPiloto[r.code] || []).push(r); });
+    const stTraces = Object.entries(porPiloto).map(([code, rows]) => ({
+      type: "scatter", mode: "lines+markers", name: code,
+      x: rows.map((r) => r.stint), y: rows.map((r) => r.median),
+      line: { color: rows[0].color, width: 1.8 },
+      marker: { size: 11, color: rows.map((r) => r.comp_color),
+                line: { color: "#11141b", width: 1.5 } },
+      customdata: rows.map((r) => [fmtLap(r.median), r.compound, (r.slope * 1000).toFixed(0)]),
+      hovertemplate: `<b>${code}</b> · stint %{x} (%{customdata[1]})<br>mediana %{customdata[0]} · deg %{customdata[2]} ms/vuelta<extra></extra>`,
+    }));
+    const ttSt = timeTicks(degSel.map((r) => r.median));
+    Plotly.newPlot(cSt.plot, stTraces, baseLayout({
+      height: 440, margin: { l: 64, r: 14, t: 14, b: 44 },
+      xaxis: { ...baseLayout().xaxis, title: { text: "STINT", font: { size: 10 } }, dtick: 1 },
+      yaxis: { ...baseLayout().yaxis, ...ttSt },
+      legend: { orientation: "h", y: -0.14, font: { size: 10.5 } },
+    }), PLOTLY_CFG);
     const badge = (sl) => sl < 0 ? ["#3F7BF0", "Mejora"] : sl < 0.05 ? ["#2ECC71", "Excelente"]
       : sl < 0.10 ? ["#FFC400", "Normal"] : ["#FF5252", "Alta"];
     const rows = ss.deg.map((r) => {
@@ -1416,18 +1731,46 @@ function drawSessionStatsInner(zone, ss, rerender) {
     });
     zone.appendChild(cTr.card);
     zone.appendChild(el(`<div style="height:18px"></div>`));
+    const planos = ss.trap.z.flat().filter((v) => v != null).sort((a, b) => a - b);
+    const zmin = planos[Math.floor(planos.length * 0.04)] || 0;
     Plotly.newPlot(cTr.plot, [{
       type: "heatmap", x: ss.trap.laps, y: ss.trap.drivers, z: ss.trap.z,
-      colorscale: "Turbo", hoverongaps: false,
+      colorscale: "Turbo", hoverongaps: false, zmin, zmax: planos[planos.length - 1],
+      xgap: 2, ygap: 3,
+      texttemplate: "%{z:.0f}", textfont: { color: "#ffffff", size: 10.5,
+        family: "Inter Black, Inter, sans-serif" },
       hovertemplate: "<b>%{y}</b> · V%{x}<br>%{z:.0f} km/h<extra></extra>",
-      colorbar: { thickness: 10, tickfont: { size: 10, color: "#9aa0aa" } },
+      colorbar: { thickness: 12, outlinewidth: 0,
+        tickfont: { size: 10, color: "#9aa0aa" } },
     }], baseLayout({
-      height: Math.max(380, ss.trap.drivers.length * 21 + 130),
-      margin: { l: 52, r: 60, t: 12, b: 40 },
-      xaxis: { ...baseLayout().xaxis, title: { text: "VUELTA", font: { size: 10 } } },
+      height: Math.max(420, ss.trap.drivers.length * 46 + 150),
+      margin: { l: 56, r: 70, t: 14, b: 44 },
+      xaxis: { ...baseLayout().xaxis, title: { text: "VUELTA", font: { size: 10 } }, dtick: 2 },
       yaxis: { ...baseLayout().yaxis, autorange: "reversed", gridcolor: "rgba(0,0,0,0)",
-               tickfont: { size: 10 } },
+               tickfont: { size: 11 } },
     }), PLOTLY_CFG);
+  }
+
+  // TIEMPOS POR VUELTA (TABLA) — desplegable
+  if (ss.evo.length) {
+    const byLap = {};
+    ss.evo.forEach((e) => e.points.forEach((p) => {
+      (byLap[p.lap] = byLap[p.lap] || {})[e.code] = p;
+    }));
+    const lapsL = Object.keys(byLap).map(Number).sort((a, b) => a - b);
+    const head = `<tr><th class="num">V</th>${ss.evo.map((e) =>
+      `<th>${drvChip(e.code, e.color)}</th>`).join("")}</tr>`;
+    const rows = lapsL.map((l) => `<tr><td class="num"><b>${l}</b></td>${ss.evo.map((e) => {
+      const p = byLap[l][e.code];
+      if (!p) return "<td class=num>—</td>";
+      const st = p.out ? "text-decoration:line-through;color:var(--ink3)" : "";
+      return `<td class="num" style="${st}"><span style="color:${COMP_COLORS[p.comp] || "#6b7280"}">●</span> ${fmtLap(p.t)}${p.pit ? " ◆" : ""}</td>`;
+    }).join("")}</tr>`).join("");
+    zone.appendChild(el(`<details class="card" style="margin-bottom:20px">
+      <summary style="cursor:pointer;font-weight:800;font-size:12.5px;letter-spacing:1.4px">
+        TIEMPOS POR VUELTA (TABLA) · ● compuesto · ◆ pit · tachado = atípica</summary>
+      <div class="table-wrap" style="margin-top:12px;max-height:560px;overflow:auto">
+      <table><thead>${head}</thead><tbody>${rows}</tbody></table></div></details>`));
   }
 }
 

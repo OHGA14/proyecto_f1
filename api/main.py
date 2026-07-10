@@ -79,12 +79,18 @@ def get_tel_status(sid: str):
     return telemetry.status(sid)
 
 
+@app.get("/api/telemetry/schedule")
+def get_tel_schedule(year: int):
+    """Calendario del año con las sesiones de cada GP (marca las cacheadas)."""
+    return telemetry.schedule(year)
+
+
 @app.get("/api/telemetry/analysis")
-def get_tel_analysis(sid: str, drivers: str = ""):
-    """Análisis de vuelta rápida: canales por distancia, delta, G-G, fases,
-    mapa de dominancia, DTW y micro-sectores. `drivers` = códigos por coma."""
+def get_tel_analysis(sid: str, drivers: str = "", lap: int | None = None):
+    """Análisis de vuelta: canales por distancia, delta, G-G, fases, mapa,
+    DTW, micro-sectores, sectores y zonas. `lap` = vuelta específica (opcional)."""
     codes = [c.strip().upper() for c in drivers.split(",") if c.strip()] or None
-    out = telemetry.analysis(sid, codes)
+    out = telemetry.analysis(sid, codes, lap)
     if out is None:
         raise HTTPException(409, f"La sesión {sid} no está cargada (usa /api/telemetry/load).")
     return out
@@ -125,6 +131,18 @@ def get_tel_vslaps(sid: str, driver: str, lap_a: int, lap_b: int):
     if out is None:
         raise HTTPException(409, f"La sesión {sid} no está cargada.")
     return out
+
+
+@app.get("/api/historic/pace/{year}")
+def get_historic_pace(year: int):
+    """Ritmo puro por GP de la temporada: % sobre la mejor vuelta de cada carrera."""
+    return queries.historic_pace(year)
+
+
+@app.get("/api/historic/trap/{year}")
+def get_historic_trap(year: int):
+    """Récord de speed trap de cada GP de la temporada."""
+    return queries.trap_records(year)
 
 
 # La web broadcast se sirve desde el mismo proceso (sin node ni build).

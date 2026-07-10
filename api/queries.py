@@ -426,3 +426,62 @@ def drivers_index():
                 for _, r in d.iterrows()]
     finally:
         con.close()
+
+
+def historic_pace(year):
+    """Ritmo puro por GP: % sobre la mejor vuelta de cada carrera del año."""
+    con = _con()
+    try:
+        best = db.query(con, """
+            SELECT s.round, s.gp, l.driver, MIN(l.time_s) AS best_s,
+                   arg_min(l.team, l.time_s) AS team
+            FROM laps l JOIN sessions s USING(session_id)
+            WHERE s.year = ? AND s.session = 'Race'
+              AND l.time_s IS NOT NULL AND l.is_accurate
+            GROUP BY 1, 2, 3""", [year])
+        if best.empty:
+            return {"gps": [], "drivers": [], "summary": ""}
+        field = best.groupby("round")["best_s"].transform("min")
+        best["pct"] = (best["best_s"] / field - 1) * 100
+        best["label"] = best["gp"].str.replace(" Grand Prix", "", regex=False)
+        rondas = best[["round", "label"]].drop_duplicates().sort_values("round")
+        # top 6 por número de GPs disputados
+        top = (best.groupby("driver")["gp"].nunique()
+                   .sort_values(ascending=False).head(6).index.tolist())
+        equipo = best.groupby("driver")["team"].last().to_dict()
+        colores = driver_colors([(c, equipo.get(c, "")) for c in top])
+        drivers = []
+        for c in top:
+            sub = best[best["driver"] == c].set_index("round")
+            drivers.append({"code": c, "color": colores[c],
+                            "pct": [round(float(sub.loc[r, "pct"]), 3)
+                                    if r in sub.index else None
+                                    for r in rondas["round"]]})
+        medias = best[best["driver"].isin(top)].groupby("driver")["pct"].mean()
+        lider = medias.idxmin()
+        summary = (f"{lider} es el más cercano al límite en {year}: en promedio "
+                   f"quedó a +{medias.min():.2f}% de la mejor vuelta de cada GP.")
+        return {"gps": rondas["label"].tolist(), "drivers": drivers,
+                "summary": summary}
+    finally:
+        con.close()
+
+
+def trap_records(year):
+    """Récord de speed trap de cada GP del año (carrera)."""
+    con = _con()
+    try:
+        vmax = db.query(con, """
+            SELECT s.round, s.gp, l.driver, MAX(l.speed_st) AS vmax,
+                   arg_max(l.team, l.speed_st) AS team
+            FROM laps l JOIN sessions s USING(session_id)
+            WHERE s.year = ? AND s.session = 'Race' AND l.speed_st IS NOT NULL
+            GROUP BY 1, 2, 3
+            QUALIFY row_number() OVER (PARTITION BY s.round ORDER BY vmax DESC) = 1
+            ORDER BY s.round""", [year])
+        return [{"gp": r["gp"].replace(" Grand Prix", ""), "code": r["driver"],
+                 "vmax": float(r["vmax"]),
+                 "color": team_color(r["team"]) or "#9aa0aa"}
+                for _, r in vmax.iterrows()]
+    finally:
+        con.close()
