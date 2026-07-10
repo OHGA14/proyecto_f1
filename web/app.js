@@ -517,11 +517,13 @@ async function renderPilotos(zone) {
   const secNav = el(`<div class="pills" style="margin-bottom:14px">
     <button class="pill">↓ RITMO DE SESIÓN</button>
     <button class="pill">↓ TELEMETRÍA</button>
-    <button class="pill">↓ FÍSICA</button></div>`);
-  const [b1, b2, b3] = secNav.querySelectorAll("button");
+    <button class="pill">↓ FÍSICA</button>
+    <button class="pill">↓ REPLAY</button></div>`);
+  const [b1, b2, b3, b4] = secNav.querySelectorAll("button");
   b1.onclick = () => document.getElementById("sec-ritmo")?.scrollIntoView({ behavior: "smooth" });
   b2.onclick = () => document.getElementById("sec-tel")?.scrollIntoView({ behavior: "smooth" });
   b3.onclick = () => document.getElementById("sec-fis")?.scrollIntoView({ behavior: "smooth" });
+  b4.onclick = () => document.getElementById("sec-replay")?.scrollIntoView({ behavior: "smooth" });
   zone.appendChild(secNav);
 
   const chipsCard = el(`<div class="card" style="margin-bottom:18px">
@@ -872,8 +874,185 @@ function drawTelCharts(zone, d) {
     yaxis: { ...baseLayout().yaxis, gridcolor: "rgba(0,0,0,0)" },
     legend: { orientation: "h", y: 1.14, x: 0.5, xanchor: "center" },
   }), PLOTLY_CFG);
+
+  zone.appendChild(el(`<div style="height:18px"></div>`));
+  drawReplay(zone, d);
 }
 
+
+/* ───────────────────────────── REPLAY fantasma (Canvas 2D + rAF, 60 fps) */
+
+function drawReplay(zone, d) {
+  const cars = d.drivers.filter((x) => x.x && x.x.length && x.lap_time);
+  if (cars.length < 1) return;
+
+  zone.appendChild(el(`<div class="section-title" id="sec-replay">Replay de vuelta
+    <small> · fantasmas sincronizados por tiempo real</small></div>`));
+  const card = el(`<div class="card chart-card">
+    <div class="chart-head"><h2>Replay fantasma</h2>
+      <span class="sub">todos arrancan a la vez; el que va delante en pista, va delante en tiempo</span></div>
+    <div style="padding:10px 18px 6px">
+      <div class="replay-controls">
+        <button class="btn-red" id="rpPlay">▶ PLAY</button>
+        <select id="rpSpeed" style="padding:8px 34px 8px 12px">
+          <option value="0.5">0.5×</option><option value="1" selected>1×</option>
+          <option value="2">2×</option><option value="4">4×</option></select>
+        <input type="range" id="rpScrub" min="0" max="1000" value="0" style="flex:1">
+        <b id="rpTime" style="font-variant-numeric:tabular-nums;min-width:64px;text-align:right">0.0s</b>
+      </div>
+      <canvas id="rpCanvas" style="width:100%;display:block;border-radius:10px"></canvas>
+      <div id="rpHud" class="replay-hud"></div>
+    </div>
+    <div class="chart-summary" style="margin-top:8px">Animación nativa en canvas (60 fps).
+      El gap de cada tarjeta es tiempo real contra ${d.ref} en ese punto de la pista.</div>
+    <details class="chart-guide"><summary>¿Cómo leer esta gráfica?</summary><ul>
+      <li><b>¿Un fantasma se acerca en las curvas y se aleja en las rectas?</b> → coche con más carga aerodinámica: gana en curva, paga en recta.</li>
+      <li><b>¿El gap crece de golpe en una zona?</b> → ahí está el error o la diferencia real; búscala en el delta y los micro-sectores.</li>
+      <li>Usa 0.5× para estudiar una frenada concreta y el deslizador para volver a verla.</li>
+    </ul></details></div>`);
+  zone.appendChild(card);
+
+  const canvas = card.querySelector("#rpCanvas");
+  const hud = card.querySelector("#rpHud");
+  const btn = card.querySelector("#rpPlay");
+  const selV = card.querySelector("#rpSpeed");
+  const scrub = card.querySelector("#rpScrub");
+  const lblT = card.querySelector("#rpTime");
+
+  const ref = cars[0];
+  const Tmax = Math.max(...cars.map((c) => c.t[c.t.length - 1]));
+
+  // mundo → pantalla
+  const xs = ref.x, ys = ref.y;
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const H = 560;
+  let W = 800, k = 1, ox = 0, oy = 0, dpr = window.devicePixelRatio || 1;
+  const fit = () => {
+    W = canvas.clientWidth || 800;
+    canvas.width = W * dpr; canvas.height = H * dpr;
+    canvas.style.height = H + "px";
+    k = Math.min(W / (maxX - minX), H / (maxY - minY)) * 0.86;
+    ox = (W - (maxX - minX) * k) / 2 - minX * k;
+    oy = (H - (maxY - minY) * k) / 2 - minY * k;
+  };
+  const sx = (x) => x * k + ox;
+  const sy = (y) => H - (y * k + oy);   // eje Y invertido (pantalla)
+
+  // capa estática pre-renderizada: trazado + curvas + meta
+  let staticLayer = null;
+  const buildStatic = () => {
+    staticLayer = document.createElement("canvas");
+    staticLayer.width = W * dpr; staticLayer.height = H * dpr;
+    const c = staticLayer.getContext("2d");
+    c.scale(dpr, dpr);
+    c.lineJoin = c.lineCap = "round";
+    const path = () => {
+      c.beginPath();
+      c.moveTo(sx(xs[0]), sy(ys[0]));
+      for (let i = 1; i < xs.length; i++) c.lineTo(sx(xs[i]), sy(ys[i]));
+    };
+    path(); c.strokeStyle = "rgba(255,255,255,.07)"; c.lineWidth = 16; c.stroke();
+    path(); c.strokeStyle = "#2f333d"; c.lineWidth = 3.5; c.stroke();
+    c.font = "700 10px Inter, sans-serif"; c.fillStyle = "#767c88"; c.textAlign = "center";
+    (d.corners || []).forEach((cn) => c.fillText(cn.n, sx(cn.x), sy(cn.y) - 10));
+    c.fillStyle = "#e8eaed";
+    c.fillRect(sx(xs[0]) - 4, sy(ys[0]) - 4, 8, 8);
+  };
+
+  // interpolación de posición por TIEMPO (búsqueda binaria)
+  const at = (car, tau) => {
+    const t = car.t;
+    if (tau >= t[t.length - 1]) {
+      const i = t.length - 1;
+      return { x: car.x[i], y: car.y[i], v: car.speed[i], dist: car.d[i], fin: true };
+    }
+    let lo = 0, hi = t.length - 1;
+    while (hi - lo > 1) { const m = (lo + hi) >> 1; (t[m] <= tau ? lo = m : hi = m); }
+    const f = (tau - t[lo]) / Math.max(t[hi] - t[lo], 1e-6);
+    const L = (a) => a[lo] + (a[hi] - a[lo]) * f;
+    return { x: L(car.x), y: L(car.y), v: L(car.speed), dist: L(car.d), fin: false };
+  };
+  // gap real vs referencia: mi tiempo aquí menos el tiempo de la ref en esta distancia
+  const gapVsRef = (car, tau, dist) => {
+    if (car === ref) return 0;
+    let lo = 0, hi = ref.d.length - 1;
+    if (dist >= ref.d[hi]) return tau - ref.t[hi];
+    while (hi - lo > 1) { const m = (lo + hi) >> 1; (ref.d[m] <= dist ? lo = m : hi = m); }
+    const f = (dist - ref.d[lo]) / Math.max(ref.d[hi] - ref.d[lo], 1e-6);
+    return tau - (ref.t[lo] + (ref.t[hi] - ref.t[lo]) * f);
+  };
+
+  const ctx = canvas.getContext("2d");
+  const trails = new Map(cars.map((c) => [c.code, []]));
+  let tau = 0, playing = false, last = null, raf = null, arrastrando = false;
+
+  const frame = () => {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    ctx.drawImage(staticLayer, 0, 0, W, H);
+    const estados = cars.map((c) => ({ c, p: at(c, tau) }));
+    estados.forEach(({ c, p }) => {
+      const tr = trails.get(c.code);
+      tr.push([p.x, p.y]);
+      if (tr.length > 46) tr.shift();
+      for (let i = 0; i < tr.length; i++) {
+        ctx.globalAlpha = (i / tr.length) * 0.35;
+        ctx.fillStyle = c.color;
+        ctx.beginPath();
+        ctx.arc(sx(tr[i][0]), sy(tr[i][1]), 2.4, 0, 7);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    });
+    estados.forEach(({ c, p }) => {
+      const X = sx(p.x), Y = sy(p.y);
+      ctx.shadowColor = c.color; ctx.shadowBlur = 14;
+      ctx.fillStyle = c.color;
+      ctx.beginPath(); ctx.arc(X, Y, 8, 0, 7); ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.font = "800 10px Inter, sans-serif"; ctx.textAlign = "center";
+      ctx.fillStyle = "#0b0d12";
+      ctx.fillText(c.code[0], X, Y + 3.5);
+      ctx.fillStyle = c.color;
+      ctx.fillText(c.code, X, Y - 13);
+    });
+    // HUD
+    hud.innerHTML = estados.map(({ c, p }) => {
+      const g = gapVsRef(c, tau, p.dist);
+      const gtxt = c === ref ? "REF" : (g >= 0 ? `+${g.toFixed(2)}s` : `${g.toFixed(2)}s`);
+      return `<span class="chip" style="--cc:${c.color}"><i></i><b>${c.code}</b>
+        &nbsp;${p.fin ? c.lap_label : p.v.toFixed(0) + " km/h"}
+        &nbsp;<span style="color:${c === ref ? "var(--ink3)" : g > 0 ? "#ff8181" : "#7dffb0"}">${p.fin ? "" : gtxt}</span></span>`;
+    }).join("");
+    lblT.textContent = `${tau.toFixed(1)}s`;
+    if (!arrastrando) scrub.value = Math.round((tau / Tmax) * 1000);
+  };
+
+  const loop = (ts) => {
+    if (!playing) return;
+    if (last != null) tau = Math.min(Tmax, tau + ((ts - last) / 1000) * (+selV.value));
+    last = ts;
+    frame();
+    if (tau >= Tmax) { playing = false; btn.textContent = "↻ REPETIR"; return; }
+    raf = requestAnimationFrame(loop);
+  };
+  btn.onclick = () => {
+    if (playing) { playing = false; btn.textContent = "▶ PLAY"; cancelAnimationFrame(raf); return; }
+    if (tau >= Tmax) { tau = 0; trails.forEach((t) => t.length = 0); }
+    playing = true; last = null; btn.textContent = "❚❚ PAUSA";
+    raf = requestAnimationFrame(loop);
+  };
+  scrub.oninput = (e) => {
+    arrastrando = true;
+    tau = (+e.target.value / 1000) * Tmax;
+    trails.forEach((t) => t.length = 0);
+    frame();
+    arrastrando = false;
+  };
+  new ResizeObserver(() => { fit(); buildStatic(); frame(); }).observe(canvas);
+  fit(); buildStatic(); frame();
+}
 
 /* ───────────────────────────── RITMO DE SESIÓN (estadística de toda la sesión) */
 

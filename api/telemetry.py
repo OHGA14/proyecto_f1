@@ -310,6 +310,10 @@ def _assemble(s, entries):
             "glat": _downsample(ch["glat"], st, 3),
             "glong": _downsample(ch["glong"], st, 3),
             "vmax": float(np.max(ch["speed"])),
+            # posición y tiempo acumulado: alimentan el REPLAY en canvas
+            "x": _downsample(ch["x"], st, 0),
+            "y": _downsample(ch["y"], st, 0),
+            "t": _downsample(ch["t"], st, 3),
         }
         f, fr, cu = _phase_pcts(ch["throttle"], ch["brake"], ch["dt"])
         item["phases"] = {"fondo": f, "frenada": fr, "curva": cu}

@@ -291,6 +291,12 @@ select:focus { outline: none; border-color: rgba(255, 60, 60, .55); }
 .ms-g { background: #00E676; }
 .ms-y { background: #F2C94C; }
 
+/* replay fantasma */
+.replay-controls { display: flex; gap: 12px; align-items: center; margin-bottom: 10px; }
+.replay-controls input[type="range"] { accent-color: var(--red); }
+.replay-hud { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; min-height: 26px; }
+.replay-hud .chip { font-variant-numeric: tabular-nums; }
+
 @keyframes spin { to { transform: rotate(360deg); } }
 .loader-card { display: flex; align-items: center; gap: 16px; }
 .spinner {
