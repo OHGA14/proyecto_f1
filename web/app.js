@@ -507,9 +507,22 @@ async function renderPilotos(zone) {
   zone.innerHTML = "";
   zone.appendChild(el(`<div class="skeleton-block" style="height:380px"></div>`));
   const q = state.telSel && state.telSel.length ? `&drivers=${state.telSel.join(",")}` : "";
-  const d = await api(`/telemetry/analysis?sid=${encodeURIComponent(state.tsid)}${q}`);
+  const [d, ss] = await Promise.all([
+    api(`/telemetry/analysis?sid=${encodeURIComponent(state.tsid)}${q}`),
+    api(`/telemetry/sessionstats?sid=${encodeURIComponent(state.tsid)}`),
+  ]);
   state.telSel = d.drivers.map((x) => x.code);
   zone.innerHTML = "";
+
+  const secNav = el(`<div class="pills" style="margin-bottom:14px">
+    <button class="pill">↓ RITMO DE SESIÓN</button>
+    <button class="pill">↓ TELEMETRÍA</button>
+    <button class="pill">↓ FÍSICA</button></div>`);
+  const [b1, b2, b3] = secNav.querySelectorAll("button");
+  b1.onclick = () => document.getElementById("sec-ritmo")?.scrollIntoView({ behavior: "smooth" });
+  b2.onclick = () => document.getElementById("sec-tel")?.scrollIntoView({ behavior: "smooth" });
+  b3.onclick = () => document.getElementById("sec-fis")?.scrollIntoView({ behavior: "smooth" });
+  zone.appendChild(secNav);
 
   const chipsCard = el(`<div class="card" style="margin-bottom:18px">
     <div style="font-size:10px;letter-spacing:2px;color:var(--ink3);font-weight:700;margin-bottom:10px">
@@ -531,6 +544,7 @@ async function renderPilotos(zone) {
     chipsWrap.appendChild(chip);
   });
   zone.appendChild(chipsCard);
+  drawSessionStats(zone, ss);
   drawTelCharts(zone, d);
 }
 
@@ -595,6 +609,7 @@ function drawTelCharts(zone, d) {
   }));
   const lapLabels = d.drivers.map((x) => `${x.code} ${x.lap_label} (V${x.lap_number})`).join(" · ");
 
+  zone.appendChild(el(`<div class="section-title" id="sec-tel">Telemetría de vuelta</div>`));
   if (d.dtw && d.dtw.length) {
     zone.appendChild(el(`<div class="card" style="margin-bottom:18px">
       <div class="chart-head" style="padding:0 0 4px"><h2>Similitud DTW · ¿qué tan parecidas son las vueltas?</h2>
@@ -727,8 +742,8 @@ function drawTelCharts(zone, d) {
   }
 
   // canales a ANCHO COMPLETO (aquí se ven las diferencias finas)
-  const mkChannel = (title, key, ytitle, tips) => {
-    const c = chartCard({ title, sub: "vs distancia · " + lapLabels, tips });
+  const mkChannel = (title, key, ytitle, tips, summary) => {
+    const c = chartCard({ title, sub: "vs distancia · " + lapLabels, tips, summary });
     zone.appendChild(c.card);
     zone.appendChild(el(`<div style="height:18px"></div>`));
     Plotly.newPlot(c.plot, d.drivers.map((x) => ({
@@ -744,10 +759,12 @@ function drawTelCharts(zone, d) {
     }), PLOTLY_CFG);
   };
   mkChannel("Acelerador", "throttle", "% GAS",
-    ["<b>¿Pisa a fondo antes que el otro a la salida de una curva?</b> → mejor tracción o más confianza; ahí nace la ventaja de la recta siguiente."]);
+    ["<b>¿Pisa a fondo antes que el otro a la salida de una curva?</b> → mejor tracción o más confianza; ahí nace la ventaja de la recta siguiente."],
+    d.summaries.throttle || "");
   mkChannel("Freno", "brake", "% FRENO",
     ["<b>¿Su frenada empieza más tarde (más a la derecha)?</b> → frena más profundo: típico punto de adelantamiento.",
-     "<b>¿Dos picos seguidos?</b> → soltó y volvió a frenar (corrección o chicane)."]);
+     "<b>¿Dos picos seguidos?</b> → soltó y volvió a frenar (corrección o chicane)."],
+    d.summaries.brake || "");
 
   // marchas y fases a ancho completo
   const cGear = chartCard({
@@ -765,6 +782,66 @@ function drawTelCharts(zone, d) {
     margin: { l: 50, r: 12, t: 12, b: 44 },
     xaxis: { ...baseLayout().xaxis, ...cornerAxis },
     yaxis: { ...baseLayout().yaxis, title: { text: "MARCHA", font: { size: 10 } }, dtick: 1 },
+    legend: { orientation: "h", y: 1.08, x: 1, xanchor: "right" },
+  }), PLOTLY_CFG);
+
+  zone.appendChild(el(`<div class="section-title" id="sec-fis">Física del coche</div>`));
+
+  // FUERZA G LONGITUDINAL vs distancia
+  const cGl = chartCard({
+    title: "Fuerza G longitudinal", sub: "negativo = frenada · " + lapLabels,
+    tips: ["<b>¿Picos hacia abajo de -4/-5G?</b> → las grandes frenadas del circuito; compara qué tan tarde y fuerte frena cada uno.",
+           "<b>¿Meseta positiva suave?</b> → tracción a la salida: ahí se nota el motor y el agarre trasero."],
+  });
+  zone.appendChild(cGl.card);
+  zone.appendChild(el(`<div style="height:18px"></div>`));
+  Plotly.newPlot(cGl.plot, d.drivers.map((x) => ({
+    type: "scatter", mode: "lines", name: x.code, x: x.d, y: x.glong,
+    line: { color: x.color, width: 1.6 },
+    hovertemplate: `<b>${x.code}</b> · %{y:.2f} G<extra></extra>`,
+  })), baseLayout({
+    height: 400, hovermode: "x unified", shapes: sectorShapes,
+    margin: { l: 50, r: 12, t: 12, b: 44 },
+    xaxis: { ...baseLayout().xaxis, ...cornerAxis },
+    yaxis: { ...baseLayout().yaxis, title: { text: "G LONGITUDINAL", font: { size: 10 } },
+             zeroline: true, zerolinecolor: "rgba(255,255,255,.25)" },
+    legend: { orientation: "h", y: 1.08, x: 1, xanchor: "right" },
+  }), PLOTLY_CFG);
+
+  // DESPLIEGUE DE ENERGÍA (ERS / clipping): aceleración a fondo vs velocidad
+  const cErs = chartCard({
+    title: "Despliegue de energía (ERS)", sub: "solo puntos a fondo, en recta y sin freno",
+    tips: ["<b>¿La nube cae a cero antes de la velocidad punta?</b> → clipping: la batería dejó de empujar al final de la recta.",
+           "<b>¿Una curva de tendencia más alta a media velocidad?</b> → ese coche despliega más energía saliendo de curvas.",
+           "Cada punto = una muestra con gas ≥95%, sin freno y sin carga lateral."],
+  });
+  zone.appendChild(cErs.card);
+  zone.appendChild(el(`<div style="height:18px"></div>`));
+  const ersTraces = [];
+  d.drivers.forEach((x) => {
+    const xs = [], ys = [];
+    for (let i = 0; i < x.d.length; i++) {
+      if (x.throttle[i] >= 95 && x.brake[i] < 5 && Math.abs(x.glat[i]) < 0.5) {
+        xs.push(x.speed[i]); ys.push(x.glong[i] * 9.81);
+      }
+    }
+    ersTraces.push({ type: "scatter", mode: "markers", name: x.code,
+      x: xs, y: ys, marker: { color: x.color, size: 4, opacity: 0.35 },
+      hovertemplate: `<b>${x.code}</b> · %{x:.0f} km/h · %{y:.1f} m/s²<extra></extra>` });
+    const fit = poly2fit(xs, ys);
+    if (fit) {
+      const fx = [...xs].sort((a, b) => a - b).filter((v, i, a2) => !i || v > a2[i - 1] + 2);
+      ersTraces.push({ type: "scatter", mode: "lines", showlegend: false,
+        x: fx, y: fx.map((v) => fit[0] * v * v + fit[1] * v + fit[2]),
+        line: { color: x.color, width: 2.5 }, hoverinfo: "skip" });
+    }
+  });
+  Plotly.newPlot(cErs.plot, ersTraces, baseLayout({
+    height: 460, margin: { l: 56, r: 14, t: 12, b: 46 },
+    xaxis: { ...baseLayout().xaxis, title: { text: "VELOCIDAD (KM/H)", font: { size: 10 } },
+             showgrid: true, gridcolor: "rgba(255,255,255,.05)", griddash: "dot" },
+    yaxis: { ...baseLayout().yaxis, title: { text: "ACELERACIÓN (M/S²)", font: { size: 10 } },
+             zeroline: true, zerolinecolor: "rgba(255,255,255,.25)" },
     legend: { orientation: "h", y: 1.08, x: 1, xanchor: "right" },
   }), PLOTLY_CFG);
 
@@ -795,6 +872,263 @@ function drawTelCharts(zone, d) {
     yaxis: { ...baseLayout().yaxis, gridcolor: "rgba(0,0,0,0)" },
     legend: { orientation: "h", y: 1.14, x: 0.5, xanchor: "center" },
   }), PLOTLY_CFG);
+}
+
+
+/* ───────────────────────────── RITMO DE SESIÓN (estadística de toda la sesión) */
+
+function poly2fit(xs, ys) {
+  // ajuste y = ax² + bx + c por mínimos cuadrados (para la tendencia del ERS)
+  const n = xs.length;
+  if (n < 8) return null;
+  let Sx = 0, Sx2 = 0, Sx3 = 0, Sx4 = 0, Sy = 0, Sxy = 0, Sx2y = 0;
+  for (let i = 0; i < n; i++) {
+    const x = xs[i], y = ys[i], x2 = x * x;
+    Sx += x; Sx2 += x2; Sx3 += x2 * x; Sx4 += x2 * x2;
+    Sy += y; Sxy += x * y; Sx2y += x2 * y;
+  }
+  const A = [[Sx4, Sx3, Sx2], [Sx3, Sx2, Sx], [Sx2, Sx, n]], B = [Sx2y, Sxy, Sy];
+  const det = (m) => m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+    - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+    + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+  const D = det(A);
+  if (!D) return null;
+  const rep = (m, c, v) => m.map((r, i) => r.map((x, j) => (j === c ? v[i] : x)));
+  return [det(rep(A, 0, B)) / D, det(rep(A, 1, B)) / D, det(rep(A, 2, B)) / D];
+}
+
+const COMP_COLORS = { SOFT: "#E0243F", MEDIUM: "#FFC400", HARD: "#E8EAED",
+                      INTERMEDIATE: "#2ECC71", WET: "#3F7BF0" };
+
+function timeTicks(vals) {
+  const mn = Math.min(...vals), mx = Math.max(...vals);
+  const paso = Math.max(0.5, Math.round((mx - mn) / 6 * 2) / 2);
+  const ticks = [];
+  for (let t = Math.ceil(mn * 2) / 2; t <= mx; t += paso) ticks.push(Math.round(t * 2) / 2);
+  return { tickvals: ticks, ticktext: ticks.map(fmtLap) };
+}
+
+function drawSessionStats(zone, ss) {
+  zone.appendChild(el(`<div class="section-title" id="sec-ritmo">Ritmo de sesión
+    <small> · ${ss.session} · toda la sesión, no solo la vuelta rápida</small></div>`));
+
+  // tiles: veredicto
+  if (ss.cv.length) {
+    const rapido = [...ss.cv].sort((a, b) => a.median - b.median)[0];
+    const consistente = ss.cv[0];
+    zone.appendChild(el(`<div class="tiles" style="margin-bottom:18px">
+      <div class="card tile" style="--tc:${rapido.color}"><div class="label">Mejor ritmo (mediana)</div>
+        <div class="value">${rapido.code}</div><div class="hint">${rapido.median_label} · ${rapido.laps} vueltas limpias</div></div>
+      <div class="card tile" style="--tc:${consistente.color}"><div class="label">Más consistente</div>
+        <div class="value">${consistente.code}</div><div class="hint">CV ${consistente.cv.toFixed(2)}% · σ ${consistente.sigma.toFixed(3)}s</div></div>
+      <div class="card tile"><div class="label">Vueltas de la sesión</div>
+        <div class="value">${ss.n_laps}</div><div class="hint">${ss.type === "race" ? "carrera" : ss.type === "quali" ? "clasificación" : "práctica"}</div></div>
+    </div>`));
+  }
+
+  // tablero de qualy
+  if (ss.quali && ss.quali.length) {
+    zone.appendChild(el(`<div class="section-title">Clasificación Q1 · Q2 · Q3
+      <small> · ${ss.summaries.quali || ""}</small></div>`));
+    const rows = ss.quali.map((r) => `<tr><td class="num">${r.pos ?? "—"}</td>
+      <td>${drvChip(r.code, r.color)}</td>
+      <td class="num">${r.q1}</td><td class="num">${r.q2}</td><td class="num">${r.q3}</td>
+      <td class="num"><b>${r.gap}</b></td><td>${r.corte}</td></tr>`).join("");
+    zone.appendChild(el(`<div class="card table-wrap" style="margin-bottom:18px"><table>
+      <thead><tr><th class="num">Pos</th><th>Piloto</th><th class="num">Q1</th>
+      <th class="num">Q2</th><th class="num">Q3</th><th class="num">Gap</th><th>Corte</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`));
+  }
+
+  // evolución de tiempos con compuestos y atípicas
+  if (ss.evo.length) {
+    const cEvo = chartCard({
+      title: "Evolución de tiempos por vuelta", sub: "color del punto = compuesto · ✕ gris = pit/SC/atípica",
+      summary: ss.summaries.ritmo || "",
+      tips: ["<b>¿La línea baja poco a poco?</b> → el coche mejora al quemar combustible; si sube, la goma degrada más de lo que el combustible regala.",
+             "<b>¿Escalón hacia abajo tras una ✕?</b> → paró y volvió con goma nueva.",
+             "Toca un piloto en la leyenda para aislarlo."],
+      legendHtml: `<div class="compound-legend">${Object.entries(COMP_COLORS).map(([k, v]) =>
+        `<span class="chip" style="--cc:${v}"><i></i>${k}</span>`).join("")}</div>`,
+    });
+    zone.appendChild(cEvo.card);
+    zone.appendChild(el(`<div style="height:18px"></div>`));
+    const traces = [];
+    const outX = [], outY = [];
+    ss.evo.forEach((e) => {
+      const limpio = e.points.filter((p) => !p.out);
+      traces.push({ type: "scatter", mode: "lines+markers", name: e.code,
+        x: limpio.map((p) => p.lap), y: limpio.map((p) => p.t),
+        line: { color: e.color, width: 1.7 },
+        marker: { size: 5.5, color: limpio.map((p) => COMP_COLORS[p.comp] || e.color),
+                  line: { color: "#11141b", width: 1 } },
+        customdata: limpio.map((p) => [fmtLap(p.t), p.comp]),
+        hovertemplate: `<b>${e.code}</b> · V%{x}<br>%{customdata[0]} · %{customdata[1]}<extra></extra>` });
+      e.points.filter((p) => p.out).forEach((p) => { outX.push(p.lap); outY.push(p.t); });
+    });
+    if (outX.length) traces.push({ type: "scatter", mode: "markers", name: "Atípicas",
+      x: outX, y: outY, marker: { symbol: "x-thin-open", size: 6, color: "#5b616d" },
+      hoverinfo: "skip" });
+    const tt = timeTicks(traces.flatMap((t) => t.y).filter((v) => v != null));
+    Plotly.newPlot(cEvo.plot, traces, baseLayout({
+      height: 520, hovermode: "closest",
+      margin: { l: 64, r: 14, t: 14, b: 44 },
+      xaxis: { ...baseLayout().xaxis, title: { text: "VUELTA", font: { size: 10 } } },
+      yaxis: { ...baseLayout().yaxis, ...tt },
+      legend: { orientation: "h", y: -0.12, font: { size: 10.5 } },
+    }), PLOTLY_CFG);
+  }
+
+  // fila: boxplot + tabla de consistencia
+  const rowB = el(`<div class="grid cols-2" style="margin-bottom:18px"></div>`);
+  zone.appendChild(rowB);
+  if (ss.box.length) {
+    const cBox = chartCard({
+      title: "Distribución de ritmo", sub: "filtrado robusto IQR · sin pits ni atípicas",
+      tips: ["<b>¿Caja pequeña?</b> → piloto metrónomo: casi todas sus vueltas son iguales.",
+             "<b>¿Caja baja pero larga?</b> → rápido pero irregular; la mediana (línea central) es su ritmo real.",
+             "Comparar MEDIANAS es más honesto que comparar la mejor vuelta."],
+    });
+    rowB.appendChild(cBox.card);
+    const tt = timeTicks(ss.box.flatMap((b) => b.times));
+    Plotly.newPlot(cBox.plot, ss.box.map((b) => ({
+      type: "box", y: b.times, name: b.code, boxpoints: false,
+      marker: { color: b.color }, line: { color: b.color, width: 1.8 },
+      fillcolor: "rgba(0,0,0,0)",
+    })), baseLayout({
+      height: 460, showlegend: false,
+      margin: { l: 64, r: 14, t: 14, b: 44 },
+      yaxis: { ...baseLayout().yaxis, ...tt },
+    }), PLOTLY_CFG);
+  }
+  if (ss.cv.length) {
+    const badge = (v) => v < 0.9 ? ["#2ECC71", "Estable"] : v < 1.3 ? ["#FFC400", "Media"] : ["#FF5252", "Variable"];
+    const rows = ss.cv.map((r) => {
+      const [c, t] = badge(r.cv);
+      return `<tr><td>${drvChip(r.code, r.color)}</td><td class="num">${r.laps}</td>
+        <td class="num">${r.median_label}</td><td class="num">${r.sigma.toFixed(3)}</td>
+        <td class="num">${r.iqr.toFixed(3)}</td>
+        <td class="num"><b style="color:${c}">${r.cv.toFixed(2)}%</b> <small style="color:${c}">${t}</small></td></tr>`;
+    }).join("");
+    rowB.appendChild(el(`<div class="card table-wrap"><div class="chart-head" style="padding:0 0 8px">
+      <h2>Consistencia (CV)</h2><span class="sub">CV = σ / mediana · menor = más regular</span></div>
+      <table><thead><tr><th>Piloto</th><th class="num">Vueltas</th><th class="num">Mediana</th>
+      <th class="num">σ</th><th class="num">IQR</th><th class="num">CV</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`));
+  }
+
+  // ritmo corregido por combustible (solo carrera) con slider
+  if (ss.type === "race" && ss.evo.length) {
+    const cFuel = chartCard({
+      title: "Ritmo corregido por combustible", sub: "quita el efecto del peso para ver la degradación pura",
+      tips: ["<b>¿Línea plana tras corregir?</b> → la goma aguantó: lo que ganaba era solo combustible.",
+             "<b>¿Sigue subiendo?</b> → degradación real del neumático.",
+             "Mueve el deslizador: ~0.035 s/vuelta es lo típico por quema de combustible."],
+    });
+    zone.appendChild(cFuel.card);
+    const ctl = el(`<div style="padding:0 18px 10px;display:flex;gap:12px;align-items:center">
+      <span style="font-size:11px;color:var(--ink3)">CORRECCIÓN</span>
+      <input type="range" min="0" max="0.08" step="0.005" value="0.035" style="flex:1;max-width:340px">
+      <b id="fuelval" style="font-size:12.5px">0.035 s/vuelta</b></div>`);
+    cFuel.card.insertBefore(ctl, cFuel.card.querySelector(".chart-guide"));
+    const drawFuel = (k) => {
+      const traces = ss.evo.map((e) => {
+        const limpio = e.points.filter((p) => !p.out);
+        return { type: "scatter", mode: "lines", name: e.code,
+          x: limpio.map((p) => p.lap), y: limpio.map((p) => p.t + k * (p.lap - 1)),
+          line: { color: e.color, width: 1.7 },
+          hovertemplate: `<b>${e.code}</b> · V%{x}<br>%{y:.3f}s corregido<extra></extra>` };
+      });
+      Plotly.react(cFuel.plot, traces, baseLayout({
+        height: 440, hovermode: "x unified",
+        margin: { l: 64, r: 14, t: 14, b: 44 },
+        xaxis: { ...baseLayout().xaxis, title: { text: "VUELTA", font: { size: 10 } } },
+        yaxis: { ...baseLayout().yaxis, title: { text: "SEGUNDOS (CORREGIDO)", font: { size: 10 } } },
+        legend: { orientation: "h", y: -0.12, font: { size: 10.5 } },
+      }), PLOTLY_CFG);
+    };
+    ctl.querySelector("input").oninput = (e2) => {
+      ctl.querySelector("#fuelval").textContent = `${(+e2.target.value).toFixed(3)} s/vuelta`;
+      drawFuel(+e2.target.value);
+    };
+    drawFuel(0.035);
+    zone.appendChild(el(`<div style="height:18px"></div>`));
+  }
+
+  // degradación por stint (tabla con badge)
+  if (ss.deg && ss.deg.length) {
+    zone.appendChild(el(`<div class="section-title">Degradación por stint
+      <small> · ${ss.summaries.deg || ""}</small></div>`));
+    const badge = (sl) => sl < 0 ? ["#3F7BF0", "Mejora"] : sl < 0.05 ? ["#2ECC71", "Excelente"]
+      : sl < 0.10 ? ["#FFC400", "Normal"] : ["#FF5252", "Alta"];
+    const rows = ss.deg.map((r) => {
+      const [c, t] = badge(r.slope);
+      return `<tr><td>${drvChip(r.code, r.color)}</td><td class="num">${r.stint}</td>
+        <td><span class="chip" style="--cc:${r.comp_color}"><i></i>${r.compound}</span></td>
+        <td class="num">${r.laps}</td><td class="num">${fmtLap(r.median)}</td>
+        <td class="num"><b style="color:${c}">${(r.slope * 1000).toFixed(0)} ms/vuelta</b>
+        <small style="color:${c}">${t}</small></td></tr>`;
+    }).join("");
+    zone.appendChild(el(`<div class="card table-wrap" style="margin-bottom:18px"><table>
+      <thead><tr><th>Piloto</th><th class="num">Stint</th><th>Goma</th><th class="num">Vueltas</th>
+      <th class="num">Mediana</th><th class="num">Degradación</th></tr></thead>
+      <tbody>${rows}</tbody></table>
+      <div class="chart-summary" style="margin:10px 0 4px">La degradación es la pendiente del stint:
+      cuántos ms pierde por vuelta. "Mejora" = iba más rápido cada vuelta (goma entrando o quemando combustible).</div></div>`));
+  }
+
+  // parrilla → meta (solo carrera)
+  if (ss.grid && ss.grid.length) {
+    const cGr = chartCard({
+      title: "Parrilla → meta", sub: "posiciones ganadas (verde) o perdidas (rojo) respecto a la salida",
+      summary: ss.summaries.grid || "",
+      tips: ["<b>¿Barra verde larga?</b> → gran remontada: salió atrás y acabó delante.",
+             "<b>¿Roja larga?</b> → mal día: problema mecánico, sanción o mala estrategia."],
+    });
+    zone.appendChild(cGr.card);
+    zone.appendChild(el(`<div style="height:18px"></div>`));
+    const g = [...ss.grid].reverse();
+    Plotly.newPlot(cGr.plot, [{
+      type: "bar", orientation: "h",
+      y: g.map((x) => x.code), x: g.map((x) => x.delta),
+      marker: { color: g.map((x) => x.delta > 0 ? "#2ECC71" : x.delta < 0 ? "#FF5252" : "#5b616d"),
+                line: { color: "#11141b", width: 2 } },
+      text: g.map((x) => ` P${x.grid}→P${x.pos} `), textposition: "outside",
+      textfont: { size: 10, color: "#9aa0aa" },
+      hovertemplate: "<b>%{y}</b> · %{x:+d} posiciones<extra></extra>",
+    }], baseLayout({
+      height: Math.max(360, g.length * 22 + 110),
+      margin: { l: 52, r: 60, t: 12, b: 40 },
+      xaxis: { ...baseLayout().xaxis, title: { text: "± POSICIONES", font: { size: 10 } },
+               zeroline: true, zerolinecolor: "rgba(255,255,255,.3)" },
+      yaxis: { ...baseLayout().yaxis, gridcolor: "rgba(0,0,0,0)", tickfont: { size: 10 } },
+    }), PLOTLY_CFG);
+  }
+
+  // heatmap de speed trap por vuelta
+  if (ss.trap) {
+    const cTr = chartCard({
+      title: "Speed trap por vuelta", sub: "velocidad punta de cada piloto en cada vuelta (km/h)",
+      summary: ss.summaries.trap || "",
+      tips: ["<b>¿Una fila que se enfría (azul) al final?</b> → gestionaba o perdió motor/rebufo.",
+             "<b>¿Columna entera fría?</b> → vuelta lenta de todos: SC o lluvia.",
+             "<b>¿Un punto rojo aislado?</b> → rebufo perfecto o DRS en esa vuelta."],
+    });
+    zone.appendChild(cTr.card);
+    zone.appendChild(el(`<div style="height:18px"></div>`));
+    Plotly.newPlot(cTr.plot, [{
+      type: "heatmap", x: ss.trap.laps, y: ss.trap.drivers, z: ss.trap.z,
+      colorscale: "Turbo", hoverongaps: false,
+      hovertemplate: "<b>%{y}</b> · V%{x}<br>%{z:.0f} km/h<extra></extra>",
+      colorbar: { thickness: 10, tickfont: { size: 10, color: "#9aa0aa" } },
+    }], baseLayout({
+      height: Math.max(380, ss.trap.drivers.length * 21 + 130),
+      margin: { l: 52, r: 60, t: 12, b: 40 },
+      xaxis: { ...baseLayout().xaxis, title: { text: "VUELTA", font: { size: 10 } } },
+      yaxis: { ...baseLayout().yaxis, autorange: "reversed", gridcolor: "rgba(0,0,0,0)",
+               tickfont: { size: 10 } },
+    }), PLOTLY_CFG);
+  }
 }
 
 /* ───────────────────────────── router */

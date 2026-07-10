@@ -17,7 +17,7 @@ import fastf1 as ff1
 from f1core.laps import get_selected_lap
 from f1core.physics import compute_gg_from_telemetry, _dtw_distance
 from f1core.timeutils import _get_sector_cut_distances
-from api.queries import driver_colors, driver_name, fmt_lap
+from api.queries import driver_colors, driver_name, fmt_lap, COMPOUND_DISPLAY
 
 CACHE_DIR = "cache.nosync"
 _LOCK = threading.Lock()
@@ -437,6 +437,11 @@ def _assemble(s, entries):
                         f"{_N_MINISECTORS} mini-sectores del trazado.")
     fondos = " · ".join(f"{d['code']} {d['phases']['fondo']:.0f}%" for d in drivers)
     summaries["phases"] = f"% de la vuelta a fondo: {fondos}."
+    summaries["throttle"] = ("Gas medio en la vuelta: " + " · ".join(
+        f"{e['key']} {float(np.mean(e['ch']['throttle'])):.0f}%" for e in entries) + ".")
+    summaries["brake"] = ("Porcentaje de la vuelta frenando: " + " · ".join(
+        f"{e['key']} {float(np.mean(np.asarray(e['ch']['brake'], dtype=float) > 0.05) * 100):.0f}%"
+        for e in entries) + ".")
     if dtw:
         partes = "; ".join(f"{x['code']} difiere {x['mean_kmh']} km/h de media "
                            f"({x['label']}, máx. en curva {x['corner']})" for x in dtw)
@@ -450,3 +455,164 @@ def _assemble(s, entries):
             "cuts": ch_ref.get("cuts") or [], "segments": segments,
             "dtw": dtw, "micro": micro, "summaries": summaries,
             "info": {"total_m": round(d_total)}}
+
+
+# ────────────────────────────────────────────── estadísticas de sesión (RITMO)
+
+def session_stats(sid):
+    """Análisis de ritmo de TODA la sesión cargada (boxplot, CV, evolución,
+    degradación por stint, parrilla→meta, heatmap de speed trap, tablero de
+    qualy). Reproduce el bloque PANORAMA/CARRERA del laboratorio."""
+    s = _ready_session(sid)
+    if s is None:
+        return None
+    disponibles = available_drivers(sid)
+    colores = {d["code"]: d["color"] for d in disponibles}
+    orden = [d["code"] for d in disponibles]
+    name = str(s.name)
+    tipo = ("quali" if ("Qualifying" in name or "Shootout" in name)
+            else "race" if name in ("Race", "Sprint") else "practice")
+
+    df = s.laps.copy()
+    df["t"] = df["LapTime"].dt.total_seconds()
+    n_laps = int(df["LapNumber"].max()) if len(df) else 0
+
+    box, cv, evo = [], [], []
+    for code in orden:
+        valid = df[(df["Driver"] == code) & df["t"].notna()]
+        if valid.empty:
+            continue
+        t = valid["t"]
+        q1, q3 = t.quantile(.25), t.quantile(.75)
+        lim = q3 + 1.5 * (q3 - q1)
+        pit = valid["PitInTime"].notna() | valid["PitOutTime"].notna()
+        clean = valid[~pit & (valid["t"] <= lim)]["t"]
+        if len(clean) < 2:
+            clean = t[t <= lim]
+        if clean.empty:
+            continue
+        box.append({"code": code, "color": colores.get(code),
+                    "times": [round(float(x), 3) for x in clean]})
+        med = float(clean.median())
+        sig = float(clean.std()) if len(clean) > 1 else 0.0
+        cv.append({"code": code, "color": colores.get(code),
+                   "median": round(med, 3), "median_label": fmt_lap(med),
+                   "sigma": round(sig, 3),
+                   "iqr": round(float(clean.quantile(.75) - clean.quantile(.25)), 3),
+                   "cv": round(sig / med * 100, 3) if med else 0.0,
+                   "laps": int(len(clean))})
+        pts = []
+        for _, r in valid.iterrows():
+            es_pit = (r["PitInTime"] == r["PitInTime"]) or (r["PitOutTime"] == r["PitOutTime"])
+            pts.append({"lap": int(r["LapNumber"]), "t": round(float(r["t"]), 3),
+                        "comp": str(r.get("Compound", "")).upper(),
+                        "out": bool(es_pit or r["t"] > lim)})
+        evo.append({"code": code, "color": colores.get(code), "points": pts})
+
+    # degradación por stint (pendiente s/vuelta sobre vueltas limpias)
+    deg = []
+    sub_all = df[df["t"].notna() & df["Stint"].notna()
+                 & df["PitInTime"].isna() & df["PitOutTime"].isna()]
+    for code in orden:
+        for stint, g in sub_all[sub_all["Driver"] == code].groupby("Stint"):
+            tq3 = g["t"].quantile(.75)
+            lim = tq3 + 1.5 * (tq3 - g["t"].quantile(.25))
+            g2 = g[g["t"] <= lim]
+            if len(g2) < 5:
+                continue
+            slope = float(np.polyfit(g2["LapNumber"], g2["t"], 1)[0])
+            if abs(slope) > 0.3:
+                continue  # stint contaminado (SC/lluvia/paradas), no es degradación real
+            comp = str(g2["Compound"].iloc[0]).upper()
+            deg.append({"code": code, "color": colores.get(code), "stint": int(stint),
+                        "compound": comp,
+                        "comp_color": COMPOUND_DISPLAY.get(comp, "#6b7280"),
+                        "laps": int(len(g2)),
+                        "median": round(float(g2["t"].median()), 3),
+                        "slope": round(slope, 4)})
+
+    # parrilla → meta (solo carrera) y tablero de qualy
+    gridfin, quali = [], None
+    res = s.results if s.results is not None else None
+    if res is not None and len(res):
+        if tipo == "race":
+            for _, r in res.iterrows():
+                try:
+                    gp, ps = float(r["GridPosition"]), float(r["Position"])
+                except Exception:
+                    continue
+                if gp != gp or ps != ps or gp == 0:
+                    continue
+                code = str(r["Abbreviation"])
+                gridfin.append({"code": code, "color": colores.get(code, "#9aa0aa"),
+                                "grid": int(gp), "pos": int(ps), "delta": int(gp - ps)})
+            gridfin.sort(key=lambda x: x["delta"], reverse=True)
+        elif tipo == "quali":
+            def _sec(v):
+                try:
+                    return v.total_seconds() if v == v and v is not None else None
+                except Exception:
+                    return None
+            filas = []
+            pole = None
+            for _, r in res.sort_values("Position").iterrows():
+                code = str(r["Abbreviation"])
+                q1v, q2v, q3v = _sec(r.get("Q1")), _sec(r.get("Q2")), _sec(r.get("Q3"))
+                if q3v is not None and (pole is None or q3v < pole):
+                    pole = q3v
+                corte = "Q3" if q3v is not None else ("Elim. Q2" if q2v is not None else "Elim. Q1")
+                filas.append({"pos": int(r["Position"]) if r["Position"] == r["Position"] else None,
+                              "code": code, "color": colores.get(code, "#9aa0aa"),
+                              "q1": fmt_lap(q1v), "q2": fmt_lap(q2v), "q3": fmt_lap(q3v),
+                              "q3_s": q3v, "corte": corte})
+            for f in filas:
+                f["gap"] = (f"+{f['q3_s'] - pole:.3f}" if f["q3_s"] is not None and pole is not None
+                            and f["q3_s"] > pole else ("POLE" if f["q3_s"] == pole else "—"))
+                del f["q3_s"]
+            quali = filas
+
+    # heatmap de speed trap (piloto × vuelta)
+    trap = None
+    if "SpeedST" in df.columns:
+        stdf = df[df["SpeedST"].notna()]
+        codes_t = [c for c in orden if c in set(stdf["Driver"])]
+        if codes_t and n_laps > 1:
+            lapsx = list(range(1, n_laps + 1))
+            z = []
+            for c in codes_t:
+                m = stdf[stdf["Driver"] == c].set_index("LapNumber")["SpeedST"]
+                z.append([float(m[lp]) if lp in m.index else None for lp in lapsx])
+            trap = {"drivers": codes_t, "laps": lapsx, "z": z}
+
+    summaries = {}
+    if cv:
+        rapido = min(cv, key=lambda x: x["median"])
+        consistente = min(cv, key=lambda x: x["cv"])
+        summaries["ritmo"] = (f"Mejor ritmo mediano: {rapido['code']} "
+                              f"({rapido['median_label']}). Más consistente: "
+                              f"{consistente['code']} (CV {consistente['cv']:.2f}%). "
+                              f"Ojo: el más rápido no siempre es el más regular.")
+    if deg:
+        peor = max(deg, key=lambda x: x["slope"])
+        summaries["deg"] = (f"Mayor degradación: {peor['code']} en el stint "
+                            f"{peor['stint']} ({peor['compound']}): "
+                            f"+{peor['slope']*1000:.0f} ms por vuelta.")
+    if gridfin:
+        top = gridfin[0]
+        if top["delta"] > 0:
+            summaries["grid"] = (f"Mayor remontada: {top['code']} "
+                                 f"(P{top['grid']} → P{top['pos']}, +{top['delta']}).")
+    if trap:
+        zmax, quien = 0.0, ""
+        for i, c in enumerate(trap["drivers"]):
+            fila = [v for v in trap["z"][i] if v]
+            if fila and max(fila) > zmax:
+                zmax, quien = max(fila), c
+        summaries["trap"] = f"Récord del speed trap: {zmax:.0f} km/h de {quien}."
+    if quali:
+        summaries["quali"] = (f"Pole: {quali[0]['code']} ({quali[0]['q3']}). "
+                              f"El tablero marca en qué ronda quedó eliminado cada piloto.")
+
+    return {"type": tipo, "session": name, "n_laps": n_laps, "box": box,
+            "cv": sorted(cv, key=lambda x: x["cv"]), "evo": evo, "deg": deg,
+            "grid": gridfin, "quali": quali, "trap": trap, "summaries": summaries}

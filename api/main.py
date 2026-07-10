@@ -90,6 +90,16 @@ def get_tel_analysis(sid: str, drivers: str = ""):
     return out
 
 
+@app.get("/api/telemetry/sessionstats")
+def get_tel_sessionstats(sid: str):
+    """Ritmo de la sesión completa: boxplot, consistencia, evolución,
+    degradación por stint, parrilla→meta, heatmap de speed trap, qualy."""
+    out = telemetry.session_stats(sid)
+    if out is None:
+        raise HTTPException(409, f"La sesión {sid} no está cargada.")
+    return out
+
+
 @app.get("/api/telemetry/drivers")
 def get_tel_drivers(sid: str):
     """Pilotos de la sesión cargada, ordenados por vuelta rápida."""
