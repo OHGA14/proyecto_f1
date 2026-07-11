@@ -648,6 +648,31 @@ def session_stats(sid):
                            "from": int(g["LapNumber"].min()),
                            "to": int(g["LapNumber"].max())})
 
+    # paradas: vuelta de entrada, goma nueva y tiempo perdido vs vueltas limpias
+    pits_out = []
+    med_por = {c["code"]: c["median"] for c in cv}
+    for code in orden:
+        segs = sorted([x for x in stints if x["code"] == code], key=lambda x: x["from"])
+        if not segs:
+            continue
+        sub = df[df["Driver"] == code]
+        stops = []
+        for a, b in zip(segs, segs[1:]):
+            lap_in = a["to"]
+            t_in = sub[sub["LapNumber"] == lap_in]["t"]
+            t_out = sub[sub["LapNumber"] == lap_in + 1]["t"]
+            lost = None
+            if (len(t_in) and len(t_out) and code in med_por
+                    and t_in.notna().all() and t_out.notna().all()):
+                lost = round(float(t_in.iloc[0] + t_out.iloc[0]) - 2 * med_por[code], 1)
+                if lost < 0:
+                    lost = None  # dato contaminado (SC comprimió los tiempos)
+            stops.append({"lap": int(lap_in), "comp": b["compound"],
+                          "color": b["color"], "lost": lost})
+        con_dato = [x["lost"] for x in stops if x["lost"] is not None]
+        pits_out.append({"code": code, "color": colores.get(code), "stops": stops,
+                         "total_lost": round(sum(con_dato), 1) if con_dato else None})
+
     # posición vuelta a vuelta + gap al líder (carrera)
     positions, gaps = [], []
     if tipo == "race":
@@ -706,7 +731,7 @@ def session_stats(sid):
     return {"type": tipo, "session": name, "n_laps": n_laps, "box": box,
             "cv": sorted(cv, key=lambda x: x["cv"]), "evo": evo, "deg": deg,
             "grid": gridfin, "quali": quali, "trap": trap,
-            "sc_ranges": sc_ranges, "stints": stints,
+            "sc_ranges": sc_ranges, "stints": stints, "pits": pits_out,
             "positions": positions, "gaps": gaps, "summaries": summaries}
 
 
