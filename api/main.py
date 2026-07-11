@@ -9,7 +9,7 @@ import os
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
 
-from api import queries, telemetry
+from api import queries, telemetry, updater
 
 app = FastAPI(
     title="HABIB CONTROL · F1 API",
@@ -131,6 +131,19 @@ def get_tel_vslaps(sid: str, driver: str, lap_a: int, lap_b: int):
     if out is None:
         raise HTTPException(409, f"La sesión {sid} no está cargada.")
     return out
+
+
+@app.post("/api/update")
+def post_update():
+    """Actualiza TODO: baja e ingesta las sesiones nuevas de la temporada
+    (Carrera/Qualy/Sprint ya disputadas que falten en la base)."""
+    return updater.start()
+
+
+@app.get("/api/update/status")
+def get_update_status():
+    """Progreso del actualizador: running, log, encontradas/ok/fallos."""
+    return updater.status()
 
 
 @app.get("/api/teams/{year}")

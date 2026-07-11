@@ -2015,7 +2015,39 @@ async function route() {
   }
 }
 
+function toast(msg, ms = 6000) {
+  document.querySelectorAll(".toast").forEach((t) => t.remove());
+  const t = el(`<div class="toast">${msg}</div>`);
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), ms);
+}
+
+async function actualizarTodo() {
+  const b = document.getElementById("btnUpdate");
+  b.classList.add("busy");
+  b.textContent = "⏳ Buscando sesiones nuevas…";
+  await fetch("/api/update", { method: "POST" });
+  const poll = async () => {
+    const st = await api("/update/status");
+    if (st.running) {
+      const ultimo = st.log[st.log.length - 1] || "…";
+      b.textContent = `⏳ ${ultimo}`.slice(0, 42);
+      return setTimeout(poll, 2500);
+    }
+    b.classList.remove("busy");
+    b.textContent = "⟳ ACTUALIZAR";
+    if (st.found === 0) toast("La base ya está al día: no hay sesiones nuevas.");
+    else toast(`Actualización lista: ${st.ok} sesión(es) nueva(s) en la base`
+               + (st.fail ? ` · ${st.fail} fallaron` : "") + ". Refrescando…");
+    state.schedCache = {};
+    route();
+  };
+  setTimeout(poll, 1500);
+}
+
 (async function init() {
+  const bu = document.getElementById("btnUpdate");
+  if (bu) bu.onclick = (e) => { e.preventDefault(); actualizarTodo(); };
   try {
     const meta = await api("/meta");
     state.seasons = meta.seasons;

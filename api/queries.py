@@ -71,7 +71,17 @@ def _con():
     if not db.db_exists(DB_PATH):
         # primera ejecución sin datos: crea la base vacía (esquema incluido)
         db.connect(path=DB_PATH).close()
-    return db.connect(path=DB_PATH, read_only=True)
+    # reintento corto: durante una actualización el escritor toma la base
+    # por ráfagas de ~1 s; esperar un poco evita errores 500 transitorios
+    import time
+    ultimo = None
+    for _ in range(6):
+        try:
+            return db.connect(path=DB_PATH, read_only=True)
+        except Exception as e:
+            ultimo = e
+            time.sleep(0.4)
+    raise ultimo
 
 
 def fmt_lap(s):
