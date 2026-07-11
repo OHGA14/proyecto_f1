@@ -61,6 +61,9 @@ const skeleton = (hs) => {
   hs.forEach((h) => $view.appendChild(el(`<div class="skeleton-block" style="height:${h}px"></div>`)));
 };
 
+const heroTitle = (t, sub) =>
+  el(`<div class="hero"><h1>${t}</h1>${sub ? `<div class="sub">${sub}</div>` : ""}</div>`);
+
 const drvChip = (code, color, name = "") =>
   `<span class="drv" style="--cc:${color}"><i></i>${code}${name ? ` <small>${name}</small>` : ""}</span>`;
 
@@ -79,6 +82,7 @@ async function viewTemporada() {
   skeleton([46, 110, 460, 320]);
   const data = await api(`/championship/${state.year}`);
   $view.innerHTML = "";
+  $view.appendChild(heroTitle("Temporada", `campeonato ${state.year} · clasificación · ritmo puro · récords`));
   $view.appendChild(seasonPills(state.year, (y) => { state.year = y; viewTemporada(); }));
 
   if (!data.drivers.length) {
@@ -190,6 +194,7 @@ async function viewCarrera() {
   skeleton([46, 200]);
   const races = await api(`/races/${state.year}`);
   $view.innerHTML = "";
+  $view.appendChild(heroTitle("Carrera", "elige un gran premio · las gráficas obedecen a tus pilotos"));
   $view.appendChild(seasonPills(state.year, (y) => { state.year = y; state.sid = null; viewCarrera(); }));
 
   if (!races.length) {
@@ -445,6 +450,7 @@ async function viewH2H() {
   const drivers = await api("/drivers");
   $view.innerHTML = "";
 
+  $view.appendChild(heroTitle("Head-to-Head", "duelo histórico · delta de mejor vuelta en cada GP común"));
   const codes = drivers.map((d) => d.code);
   if (!window._h2hA || !codes.includes(window._h2hA)) window._h2hA = codes[0];
   if (!window._h2hB || !codes.includes(window._h2hB) || window._h2hB === window._h2hA)
@@ -528,6 +534,7 @@ async function viewAnalisis() {
     else state.telYear = years[0];
   }
 
+  $view.appendChild(heroTitle("Análisis", "telemetría y ritmo de cualquier sesión · vuelta a vuelta"));
   const controls = el(`<div class="card analysis-controls" style="margin-bottom:18px">
     <select id="selYear">${years.map((y) =>
       `<option ${y === state.telYear ? "selected" : ""}>${y}</option>`).join("")}</select>
@@ -1902,6 +1909,7 @@ async function viewEquipos() {
   const raw = state._tcache[key] || (state._tcache[key] =
     await api(`/teams/${state.year}?source=${state.teamSource}`));
   $view.innerHTML = "";
+  $view.appendChild(heroTitle("Equipos", "evolución y desarrollo · déficit % al pole · convergencia"));
   $view.appendChild(seasonPills(state.year, (y) => { state.year = y; state.teamSel = null; viewEquipos(); }));
 
   const src = el(`<div class="pills" style="margin-bottom:14px">

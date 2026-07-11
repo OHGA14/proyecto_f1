@@ -34,7 +34,7 @@ html[data-theme="spacex"] {
   --ink3: #587085;
   --red: #38bdf8;
   --red-rgb: 56, 189, 248;
-  --radius: 8px;
+  --radius: 4px;
   --brand-grad: linear-gradient(93deg, #7dd3fc 0%, #e0f2fe 60%, #ffffff 100%);
   --btn-grad: linear-gradient(180deg, #38bdf8, #0284c7);
   --btn-shadow: rgba(56, 189, 248, .3);
@@ -489,3 +489,61 @@ html[data-theme="spacex"] .topbar::after {
   *, *::before, *::after { animation: none !important; transition: none !important; }
   .reveal { opacity: 1; transform: none; }
 }
+
+
+/* ═══════════ SPACEX: navegación plana, héroes gigantes, cajas rectas ═══════ */
+
+/* título héroe de cada vista (estilo "CRITICAL PATH") */
+.hero { margin: 12px 0 30px; }
+.hero h1 {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: clamp(46px, 5.6vw, 92px);
+  line-height: .92;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+.hero .sub {
+  margin-top: 12px;
+  font-size: 12px; font-weight: 600;
+  letter-spacing: 3.2px; text-transform: uppercase;
+  color: var(--ink3);
+}
+html[data-theme="spacex"] .hero h1 { letter-spacing: 2.5px; }
+
+/* navegación de TEXTO PLANO en spacex: sin contenedor, sin píldoras */
+html[data-theme="spacex"] .topbar { padding: 14px 34px 12px; }
+html[data-theme="spacex"] .nav {
+  background: transparent; border: none; border-radius: 0;
+  padding: 0; gap: 34px; align-items: center;
+}
+html[data-theme="spacex"] .nav a {
+  padding: 10px 2px; border-radius: 0;
+  font-size: 13px; letter-spacing: 1.9px; color: #b9c7d6;
+  border-bottom: 2px solid transparent;
+  transition: color .16s, border-color .16s;
+}
+html[data-theme="spacex"] .nav a:hover { background: transparent; color: #fff; }
+html[data-theme="spacex"] .nav a.active {
+  background: transparent; box-shadow: none; color: #fff;
+  border-bottom-color: rgba(var(--red-rgb), .9);
+}
+/* las dos acciones van en CAJA rectangular fina (estilo CURRENT LAUNCH) */
+html[data-theme="spacex"] .nav a.lab {
+  box-shadow: none; border: 1px solid rgba(63, 123, 240, .45);
+  border-radius: 3px; padding: 10px 14px; border-bottom-width: 1px;
+}
+html[data-theme="spacex"] .nav a.upd {
+  box-shadow: none; border: 1px solid rgba(255, 255, 255, .35);
+  border-radius: 3px; padding: 10px 14px; color: #fff;
+  letter-spacing: 2.2px; border-bottom-width: 1px;
+}
+html[data-theme="spacex"] .nav a.upd:hover { background: rgba(255, 255, 255, .08); }
+
+/* esquinas rectas en controles (spacex) */
+html[data-theme="spacex"] .pill,
+html[data-theme="spacex"] .drv-chip,
+html[data-theme="spacex"] .chip,
+html[data-theme="spacex"] select,
+html[data-theme="spacex"] .swap,
+html[data-theme="spacex"] .btn-red { border-radius: 3px; }
