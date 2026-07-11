@@ -159,6 +159,24 @@ def get_teams(year: int, source: str = "quali"):
     return queries.team_evolution(year, source)
 
 
+@app.get("/api/teams/predict/{year}")
+def get_teams_predict(year: int, source: str = "quali"):
+    """Predicción de la próxima carrera: regresión ponderada por recencia,
+    Monte Carlo (probabilidades) y backtest de validación."""
+    if source not in ("quali", "race"):
+        raise HTTPException(422, "source debe ser 'quali' o 'race'")
+    out = queries.team_predict(year, source)
+    # nombre del próximo GP desde el calendario (si FastF1 lo tiene a mano)
+    if out.get("next_round"):
+        try:
+            ev = telemetry.schedule(year).get("events", [])
+            gp = next((e["gp"] for e in ev if e["round"] == out["next_round"]), None)
+            out["next_gp"] = gp.replace(" Grand Prix", "") if gp else None
+        except Exception:
+            out["next_gp"] = None
+    return out
+
+
 @app.get("/api/historic/pace/{year}")
 def get_historic_pace(year: int):
     """Ritmo puro por GP de la temporada: % sobre la mejor vuelta de cada carrera."""

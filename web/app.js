@@ -2022,6 +2022,86 @@ async function viewEquipos() {
     </div>`));
   }
 
+  // predicción de la próxima carrera: tendencia amortiguada + Monte Carlo
+  state._pcache = state._pcache || {};
+  let pred = null;
+  try {
+    pred = state._pcache[key] || (state._pcache[key] =
+      await api(`/teams/predict/${state.year}?source=${state.teamSource}`));
+  } catch (e) { pred = null; }
+  if (pred && pred.teams && pred.teams.length >= 3) {
+    const rot = pred.next_gp ? `Ronda ${pred.next_round} · ${pred.next_gp}` : `Ronda ${pred.next_round}`;
+    $view.appendChild(el(`<div class="card" style="margin-bottom:18px">
+      <div class="chart-head" style="padding:0 0 6px"><h2>Predicción · ${rot}</h2>
+      <span class="sub">regresión ponderada por recencia + 4,000 carreras simuladas · siempre sobre TODO el campo</span></div>
+      ${(pred.summary || []).map((p) => `<div class="chart-summary" style="margin:8px 0 0">${p}</div>`).join("")}
+    </div>`));
+
+    const rowP = el(`<div class="grid cols-2" style="margin-bottom:20px"></div>`);
+    $view.appendChild(rowP);
+
+    // A) ritmo proyectado con margen de error
+    const cA = chartCard({
+      title: "Ritmo proyectado + margen de error",
+      sub: "punto = predicción · barra = donde caería 8 de cada 10 veces",
+      tips: ["<b>¿Dos barras se traslapan?</b> → esa pelea NO está decidida; el gap proyectado cabe dentro del ruido.",
+             "<b>¿Barra larga?</b> → equipo irregular: el modelo confía poco en él, y por eso mismo puede sorprender.",
+             `0% = el mejor proyectado. En una vuelta de ~${Math.round(pred.pole_med || 85)}s, +0.5% son ~${((pred.pole_med || 85) * 0.005).toFixed(2)}s.`,
+             "El modelo pesa más las últimas carreras (media vida: 3 rondas) y amortigua la tendencia para no sobre-extrapolar."],
+    });
+    rowP.appendChild(cA.card);
+    const tA = pred.teams;   // ya viene del más rápido al más lento
+    Plotly.newPlot(cA.plot, [{
+      type: "scatter", mode: "markers",
+      y: tA.map((t) => t.team), x: tA.map((t) => t.gap),
+      error_x: { type: "data", symmetric: false,
+                 array: tA.map((t) => t.hi - t.gap),
+                 arrayminus: tA.map((t) => t.gap - t.lo),
+                 color: "rgba(148,163,184,.45)", thickness: 1.4, width: 5 },
+      marker: { size: 12, color: tA.map((t) => t.color),
+                line: { color: "#11141b", width: 1.5 } },
+      hovertemplate: tA.map((t) => `<b>${t.team}</b><br>gap proyectado +${t.gap.toFixed(2)}% (≈+${t.gap_s.toFixed(2)}s/vuelta)<br>margen 80%: ${t.lo.toFixed(2)}% a ${t.hi.toFixed(2)}%<extra></extra>`),
+    }], baseLayout({
+      height: Math.max(420, tA.length * 40 + 130), showlegend: false,
+      margin: { l: 110, r: 24, t: 14, b: 46 },
+      xaxis: { ...baseLayout().xaxis, title: { text: "GAP AL MEJOR PROYECTADO (%)", font: { size: 10 } },
+               zeroline: true, zerolinecolor: "rgba(255,255,255,.3)", ticksuffix: "%" },
+      yaxis: { ...baseLayout().yaxis, autorange: "reversed",
+               gridcolor: "rgba(255,255,255,.05)", tickfont: { size: 11 } },
+    }), PLOTLY_CFG);
+
+    // B) probabilidades del Monte Carlo
+    const cB = chartCard({
+      title: "Probabilidades · 4,000 carreras simuladas",
+      sub: "barra sólida = ser el más rápido · barra tenue = terminar en el top 3",
+      tips: ["Se corren 4,000 carreras sembrando a cada equipo con su ruido REAL (su irregularidad medida) y se cuenta cuántas gana cada uno.",
+             "<b>Probabilidad no es destino:</b> 40% significa que en 6 de cada 10 simulaciones ganó OTRO equipo.",
+             "<b>¿Sólida corta pero tenue larga?</b> → no le da para ganar, pero es candidato firme al podio de ritmo.",
+             "La VALIDACIÓN del resumen mide la honestidad del modelo contra las carreras ya corridas."],
+    });
+    rowP.appendChild(cB.card);
+    const tB = [...pred.teams].sort((a, b) => a.p_win - b.p_win || a.p_top3 - b.p_top3);
+    Plotly.newPlot(cB.plot, [
+      { type: "bar", orientation: "h", name: "TOP 3",
+        y: tB.map((t) => t.team), x: tB.map((t) => t.p_top3 * 100),
+        marker: { color: tB.map((t) => rgba(t.color, 0.3)), line: { color: "#11141b", width: 1 } },
+        hovertemplate: "<b>%{y}</b> · %{x:.0f}% de terminar en el top 3<extra></extra>" },
+      { type: "bar", orientation: "h", name: "MÁS RÁPIDO",
+        y: tB.map((t) => t.team), x: tB.map((t) => t.p_win * 100),
+        marker: { color: tB.map((t) => t.color), line: { color: "#11141b", width: 1.5 } },
+        text: tB.map((t) => ` ${(t.p_win * 100).toFixed(0)}% `), textposition: "outside",
+        textfont: { size: 10, color: "#9aa0aa" },
+        hovertemplate: "<b>%{y}</b> · %{x:.0f}% de ser el más rápido<extra></extra>" },
+    ], baseLayout({
+      height: Math.max(420, tB.length * 40 + 130), barmode: "group", bargap: 0.25,
+      margin: { l: 110, r: 52, t: 14, b: 46 },
+      xaxis: { ...baseLayout().xaxis, title: { text: "PROBABILIDAD (%)", font: { size: 10 } },
+               range: [0, 106], ticksuffix: "%" },
+      yaxis: { ...baseLayout().yaxis, gridcolor: "rgba(0,0,0,0)", tickfont: { size: 11 } },
+      legend: { orientation: "h", y: 1.08, x: 1, xanchor: "right", font: { size: 10 } },
+    }), PLOTLY_CFG);
+  }
+
   const conSlope = d.teams.filter((t) => t.slope != null);
 
   // 1) evolución del déficit al pole

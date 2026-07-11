@@ -603,6 +603,40 @@ def trap_records(year):
         con.close()
 
 
+def _base_deficits(con, year, source):
+    """Mejor vuelta por equipo y ronda → déficit % al pole y a la mediana.
+    Compartido por team_evolution y team_predict."""
+    if source == "race":
+        base = db.query(con, """
+            SELECT s.round, s.gp, l.team, MIN(l.time_s) AS best_s
+            FROM laps l JOIN sessions s USING(session_id)
+            WHERE s.year = ? AND s.session = 'Race'
+              AND l.time_s IS NOT NULL AND l.is_accurate
+              AND l.team IS NOT NULL AND l.team != 'None'
+            GROUP BY 1, 2, 3""", [year])
+    else:
+        raw = db.query(con, """
+            SELECT s.round, s.gp, r.team, r.q1_s, r.q2_s, r.q3_s
+            FROM results r JOIN sessions s USING(session_id)
+            WHERE s.year = ? AND s.session = 'Qualifying'""", [year])
+        if not raw.empty:
+            # mejor tiempo del piloto = mínimo entre Q1/Q2/Q3 (ignora nulos)
+            raw["best_s"] = raw[["q1_s", "q2_s", "q3_s"]].min(axis=1, skipna=True)
+            raw = raw.dropna(subset=["best_s"])
+            base = (raw.groupby(["round", "gp", "team"], as_index=False)
+                       .agg(best_s=("best_s", "min")))
+        else:
+            base = raw
+    if base.empty:
+        return base
+    base = base.sort_values("round").reset_index(drop=True)
+    base["pole"] = base.groupby("round")["best_s"].transform("min")
+    base["mediana"] = base.groupby("round")["best_s"].transform("median")
+    base["deficit"] = ((base["best_s"] - base["pole"]) / base["pole"] * 100).round(3)
+    base["deficit_med"] = ((base["best_s"] - base["mediana"]) / base["mediana"] * 100).round(3)
+    return base
+
+
 def team_evolution(year, source="quali"):
     """Evolución de equipos: déficit % al pole (y a la mediana) por ronda,
     pendientes de desarrollo con R², convergencia de la parrilla, huella de
@@ -611,36 +645,9 @@ def team_evolution(year, source="quali"):
     import numpy as np
     con = _con()
     try:
-        if source == "race":
-            base = db.query(con, """
-                SELECT s.round, s.gp, l.team, MIN(l.time_s) AS best_s
-                FROM laps l JOIN sessions s USING(session_id)
-                WHERE s.year = ? AND s.session = 'Race'
-                  AND l.time_s IS NOT NULL AND l.is_accurate
-                  AND l.team IS NOT NULL AND l.team != 'None'
-                GROUP BY 1, 2, 3""", [year])
-        else:
-            raw = db.query(con, """
-                SELECT s.round, s.gp, r.team, r.q1_s, r.q2_s, r.q3_s
-                FROM results r JOIN sessions s USING(session_id)
-                WHERE s.year = ? AND s.session = 'Qualifying'""", [year])
-            if not raw.empty:
-                # mejor tiempo del piloto = mínimo entre Q1/Q2/Q3 (ignora nulos)
-                raw["best_s"] = raw[["q1_s", "q2_s", "q3_s"]].min(axis=1, skipna=True)
-                raw = raw.dropna(subset=["best_s"])
-                base = (raw.groupby(["round", "gp", "team"], as_index=False)
-                           .agg(best_s=("best_s", "min")))
-            else:
-                base = raw
+        base = _base_deficits(con, year, source)
         if base.empty:
             return {"rounds": [], "teams": [], "summary": None, "source": source}
-
-        # déficit % al pole y a la mediana DEL CAMPO DE EQUIPOS, por ronda
-        base = base.sort_values("round").reset_index(drop=True)
-        base["pole"] = base.groupby("round")["best_s"].transform("min")
-        base["mediana"] = base.groupby("round")["best_s"].transform("median")
-        base["deficit"] = ((base["best_s"] - base["pole"]) / base["pole"] * 100).round(3)
-        base["deficit_med"] = ((base["best_s"] - base["mediana"]) / base["mediana"] * 100).round(3)
 
         rondas = base[["round", "gp"]].drop_duplicates().sort_values("round")
         labels = [g.replace(" Grand Prix", "") for g in rondas["gp"]]
@@ -736,3 +743,88 @@ def team_evolution(year, source="quali"):
                 "summary": resumen}
     finally:
         con.close()
+
+
+def team_predict(year, source="quali"):
+    """Predicción de la próxima carrera: regresión ponderada por recencia
+    sobre el déficit % por ronda + Monte Carlo (4,000 carreras simuladas)
+    + backtest honesto contra las rondas ya corridas."""
+    import numpy as np
+    from f1core import predict as P
+    con = _con()
+    try:
+        base = _base_deficits(con, year, source)
+    finally:
+        con.close()
+    vacio = {"source": source, "year": year, "next_round": None, "teams": [],
+             "valid": None, "summary": None}
+    if base.empty or base["round"].nunique() < 4:
+        return vacio
+
+    next_round = int(base["round"].max()) + 1
+    # vuelta de pole típica del año → para traducir % a segundos por vuelta
+    pole_med = float(base.groupby("round")["pole"].first().median())
+    seg_pct = pole_med / 100.0
+
+    series = {t: list(zip(sub["round"].astype(int), sub["deficit"].astype(float)))
+              for t, sub in base.groupby("team")}
+
+    equipos = []
+    for t, pts in series.items():
+        pts = sorted(pts)
+        if len(pts) < 3:
+            continue
+        pred, sigma = P.predice([r for r, _ in pts], [v for _, v in pts], next_round)
+        equipos.append({"team": t, "color": team_color(t) or "#9aa0aa",
+                        "pred": pred, "sigma": sigma,
+                        "last": pts[-1][1], "n": len(pts)})
+    if len(equipos) < 3:
+        return vacio
+
+    p_win, p_top3 = P.simula_carrera([e["pred"] for e in equipos],
+                                     [e["sigma"] for e in equipos])
+    mejor = min(e["pred"] for e in equipos)
+    for e, pw, p3 in zip(equipos, p_win, p_top3):
+        gap = e["pred"] - mejor          # 0 = el mejor proyectado
+        e.update(gap=round(gap, 3),
+                 gap_s=round(gap * seg_pct, 3),
+                 lo=round(gap - 1.28 * e["sigma"], 3),   # intervalo 80%
+                 hi=round(gap + 1.28 * e["sigma"], 3),
+                 p_win=round(float(pw), 3), p_top3=round(float(p3), 3),
+                 pred=round(e["pred"], 3), sigma=round(e["sigma"], 3),
+                 last=round(e["last"], 3))
+    equipos.sort(key=lambda e: e["gap"])
+
+    valid = P.backtesta(series)
+
+    # resumen ejecutivo calculado
+    top = sorted(equipos, key=lambda e: -e["p_win"])[:3]
+    partes = [f"FAVORITO: {top[0]['team']} con {top[0]['p_win']*100:.0f}% de "
+              f"probabilidad de ser el equipo más rápido; lo siguen "
+              f"{top[1]['team']} ({top[1]['p_win']*100:.0f}%) y "
+              f"{top[2]['team']} ({top[2]['p_win']*100:.0f}%)."]
+    partes.append(f"RITMO PROYECTADO: {equipos[0]['team']} llega con el mejor "
+                  f"ritmo puro; {equipos[1]['team']} a {equipos[1]['gap']:.2f}% "
+                  f"(≈{equipos[1]['gap_s']:.2f}s por vuelta de {pole_med:.0f}s).")
+    if top[0]["team"] != equipos[0]["team"]:
+        partes.append(f"OJO: el favorito por probabilidad ({top[0]['team']}) no es "
+                      f"el más rápido proyectado ({equipos[0]['team']}). No es un error: "
+                      f"{top[0]['team']} es más irregular (σ ±{top[0]['sigma']:.2f}%) y esa "
+                      f"variabilidad le da más boletos en los extremos de la simulación.")
+    if valid:
+        mae_s = valid["mae"] * seg_pct
+        dif = valid["mae"] - valid["mae_base"]
+        veredicto = ("SÍ le gana" if dif < -0.005
+                     else ("empata" if abs(dif) <= 0.005 else "aún NO le gana"))
+        partes.append(f"VALIDACIÓN: re-jugando la temporada ronda a ronda, el "
+                      f"modelo erró en promedio ±{valid['mae']:.2f}% "
+                      f"(≈{mae_s:.2f}s/vuelta) y acertó el equipo más rápido en "
+                      f"{valid['aciertos']} de {valid['total']} carreras; el baseline "
+                      f"'repetir la última carrera' habría errado ±{valid['mae_base']:.2f}% "
+                      f"→ el modelo {veredicto}.")
+    partes.append("LÍMITES: el modelo solo ve ritmo puro — no sabe de lluvia, "
+                  "abandonos, sanciones ni estrategia. Son probabilidades, no destino.")
+
+    return {"source": source, "year": year, "next_round": next_round,
+            "pole_med": round(pole_med, 1), "teams": equipos, "valid": valid,
+            "summary": partes}
