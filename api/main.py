@@ -145,6 +145,17 @@ def get_historic_trap(year: int):
     return queries.trap_records(year)
 
 
+@app.middleware("http")
+async def _sin_cache_web(request, call_next):
+    """La web (html/js/css) siempre se revalida: tras actualizar el proyecto,
+    un simple Cmd+R trae la versión nueva. El vendor (plotly) sí se cachea."""
+    resp = await call_next(request)
+    path = request.url.path
+    if (path == "/" or path.endswith((".html", ".js", ".css"))) and "/vendor/" not in path:
+        resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
 # La web broadcast se sirve desde el mismo proceso (sin node ni build).
 _WEB = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
 if os.path.isdir(_WEB):
