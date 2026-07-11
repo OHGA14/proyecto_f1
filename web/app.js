@@ -690,7 +690,7 @@ async function renderPilotos(zone) {
     const on = state.telSel.includes(a.code);
     const isRef = a.code === d.ref;
     const chip = el(`<span class="drv-chip ${on ? "on" : ""}" style="--cc:${a.color}"
-      title="${a.name} · ${a.team}"><i></i>${a.code}${isRef ? ' <span class="ref-tag">REF</span>' : ""}</span>`);
+      title="${a.name} · ${a.team}${a.pos ? ` · P${a.pos}` : ""}"><i></i>${a.pos ? `<span class="ref-tag">P${a.pos}</span> ` : ""}${a.code}${isRef ? ' <span class="ref-tag">REF</span>' : ""}</span>`);
     chip.onclick = () => {
       let sel = [...state.telSel];
       if (sel.includes(a.code)) { if (sel.length > 1) sel = sel.filter((c) => c !== a.code); }

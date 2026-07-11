@@ -201,13 +201,26 @@ def available_drivers(sid):
     for c in codes:
         sub = laps[laps["Driver"] == c]
         team_of[c] = str(sub.iloc[0].get("Team", "")) if not sub.empty else ""
-    # orden: mejor vuelta ascendente (los rápidos primero)
+    # orden: POSICIÓN FINAL de la sesión (carrera/qualy); vuelta rápida
+    # solo como respaldo (prácticas sin clasificación)
     best = laps.groupby("Driver")["LapTime"].min()
-    codes.sort(key=lambda c: (best.get(c) is None,
-                              best.get(c).total_seconds() if best.get(c) is not None else 9e9))
+    pos_of = {}
+    try:
+        res = s.results
+        if res is not None and len(res):
+            for _, r in res.iterrows():
+                p = r.get("Position")
+                if p is not None and p == p:
+                    pos_of[str(r["Abbreviation"])] = float(p)
+    except Exception:
+        pass
+    codes.sort(key=lambda c: (pos_of.get(c, 999),
+                              best.get(c).total_seconds()
+                              if best.get(c) is not None else 9e9))
     cols = driver_colors([(c, team_of[c]) for c in codes])
     return [{"code": c, "name": driver_name(c), "team": team_of[c],
-             "color": cols[c]} for c in codes]
+             "color": cols[c],
+             "pos": int(pos_of[c]) if c in pos_of else None} for c in codes]
 
 
 def laps_of(sid, code):
