@@ -242,6 +242,32 @@ def session_detail(sid):
                  "from": int(r["lap_ini"]), "to": int(r["lap_fin"]),
                  "laps": int(r["vueltas"])} for _, r in s.iterrows()]})
 
+        # paradas con tiempo perdido: (in-lap + out-lap) - 2 × mediana limpia
+        lapsall = db.query(con, """
+            SELECT driver, lap, time_s, is_pit_in, is_pit_out
+            FROM laps WHERE session_id=? AND time_s IS NOT NULL""", [sid])
+        pits = []
+        for code in orden:
+            sub = lapsall[lapsall["driver"] == code]
+            limpio = sub[~sub["is_pit_in"] & ~sub["is_pit_out"]]["time_s"]
+            med = float(limpio.median()) if len(limpio) >= 3 else None
+            segs = next((s_["stints"] for s_ in strategy if s_["code"] == code), [])
+            stops = []
+            for a, b in zip(segs, segs[1:]):
+                lap_in = a["to"]
+                t_in = sub[sub["lap"] == lap_in]["time_s"]
+                t_out = sub[sub["lap"] == lap_in + 1]["time_s"]
+                lost = None
+                if med and len(t_in) and len(t_out):
+                    lost = round(float(t_in.iloc[0] + t_out.iloc[0]) - 2 * med, 1)
+                    if lost < 0:
+                        lost = None  # SC comprimió los tiempos: dato contaminado
+                stops.append({"lap": int(lap_in), "comp": b["compound"],
+                              "color": b["color"], "lost": lost})
+            con_dato = [x["lost"] for x in stops if x["lost"] is not None]
+            pits.append({"code": code, "stops": stops,
+                         "total_lost": round(sum(con_dato), 1) if con_dato else None})
+
         vmax = db.query(con, """
             SELECT driver, MAX(speed_st) AS vmax FROM laps
             WHERE session_id=? AND speed_st IS NOT NULL
@@ -369,7 +395,7 @@ def session_detail(sid):
             "info": {"sid": sid, "year": int(info["year"]), "gp": info["gp"],
                      "session": info["session"], "date": str(info["date"])[:10],
                      "n_laps": int(info["n_laps"]), "circuit": info["circuit"]},
-            "results": results, "pace": pace, "strategy": strategy,
+            "results": results, "pace": pace, "strategy": strategy, "pits": pits,
             "speedtrap": speedtrap, "laps_chart": laps_chart, "gaps": gaps,
             "sc_ranges": sc_ranges, "sectors": sectors, "summaries": summaries,
         }

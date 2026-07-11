@@ -291,116 +291,22 @@ async function viewCarrera() {
     legend: { orientation: "h", y: -0.18, font: { size: 10.5 } },
   }), PLOTLY_CFG);
 
-  // estrategia
-  const compounds = [...new Set(d.strategy.flatMap((s) => s.stints.map((x) => x.compound)))];
-  const c2 = chartCard({
-    title: "Estrategia de neumáticos", sub: "orden = clasificación final",
-    summary: d.summaries.strategy || "",
-    tips: [
-      "<b>¿Un bloque más largo que los vecinos?</b> → estiró el stint: posible overcut.",
-      "<b>¿Paró antes que su rival directo?</b> → intento de undercut.",
-      "<b>¿Verde o azul?</b> → intermedios/lluvia: carrera mojada.",
-    ],
-    legendHtml: `<div class="compound-legend">${compounds.map((c) =>
-      `<span class="chip" style="--cc:${(d.strategy.flatMap((s) => s.stints).find((x) => x.compound === c) || {}).color}"><i></i>${c}</span>`).join("")}</div>`,
-  });
-  two.appendChild(c2.card);
-  two.appendChild(el(`<div style="height:20px"></div>`));
+  // pits y estrategia (mismo muro que ANÁLISIS)
   const stratF = F(d.strategy);
-  const order = stratF.map((s) => s.code);
-  const bars = stratF.flatMap((s) => s.stints.map((st) => ({
-    y: [s.code], base: [st.from - 1], x: [st.to - st.from + 1],
-    type: "bar", orientation: "h", width: 0.55,
-    marker: { color: st.color, line: { color: "#11141b", width: 2 } },
-    hovertemplate: `<b>${s.code}</b> · ${st.compound}<br>V${st.from}–V${st.to} (${st.laps} vueltas)<extra></extra>`,
-    showlegend: false,
-  })));
-  Plotly.newPlot(c2.plot, bars, baseLayout({
-    height: Math.max(240, order.length * 30 + 150), barmode: "stack",
-    margin: { l: 52, r: 16, t: 16, b: 40 },
-    xaxis: { ...baseLayout().xaxis, title: { text: "VUELTA", font: { size: 10 } } },
-    yaxis: { ...baseLayout().yaxis, categoryorder: "array",
-             categoryarray: [...order].reverse(), gridcolor: "rgba(0,0,0,0)", tickfont: { size: 10 } },
-  }), PLOTLY_CFG);
-
-  // bandas de SC/VSC compartidas por lap chart y gap
-  const scShapes = (d.sc_ranges || []).map(([l0, l1]) => ({
-    type: "rect", xref: "x", x0: l0 - 0.5, x1: l1 + 0.5, yref: "paper", y0: 0, y1: 1,
-    fillcolor: "rgba(255,255,255,.07)", line: { width: 0 }, layer: "below",
-  }));
-
-  // LAP CHART: posición vuelta a vuelta
-  d.laps_chart = F(d.laps_chart);
-  d.gaps = F(d.gaps);
-  d.speedtrap = F(d.speedtrap);
-  if (d.sectors) d.sectors.rows = d.sectors.rows.filter((r) => selC.has(r.code));
-  if (d.laps_chart && d.laps_chart.length) {
-    const cLap = chartCard({
-      title: "Lap chart · posición vuelta a vuelta", sub: "bandas grises = SC/VSC",
-      summary: d.summaries.lapchart || "",
-      tips: ["<b>¿Una línea cae de golpe varias posiciones?</b> → pit stop; mira si las recupera (estrategia buena) o no.",
-             "<b>¿Cruces constantes entre dos líneas?</b> → batalla en pista real, vuelta a vuelta.",
-             "<b>¿Saltos durante una banda gris?</b> → posiciones ganadas/perdidas parando bajo coche de seguridad (parada 'gratis')."],
-    });
-    $view.appendChild(cLap.card);
-    Plotly.newPlot(cLap.plot, d.laps_chart.map((x) => ({
-      type: "scatter", mode: "lines", name: x.code, x: x.laps, y: x.pos,
-      line: { color: x.color, width: 1.8 },
-      hovertemplate: `<b>${x.code}</b> · V%{x} · P%{y}<extra></extra>`,
-    })), baseLayout({
-      height: 620, shapes: scShapes,
-      margin: { l: 46, r: 14, t: 14, b: 44 },
-      xaxis: { ...baseLayout().xaxis, title: { text: "VUELTA", font: { size: 10 } } },
-      yaxis: { ...baseLayout().yaxis, title: { text: "POSICIÓN", font: { size: 10 } },
-               autorange: "reversed", dtick: 2 },
-      legend: { orientation: "h", y: -0.1, font: { size: 10.5 } },
-    }), PLOTLY_CFG);
-    $view.appendChild(el(`<div style="height:18px"></div>`));
-  }
-
-  // GAP AL LÍDER
-  if (d.gaps && d.gaps.length) {
-    const cGap = chartCard({
-      title: "Gap al líder", sub: "segundos detrás del primero, vuelta a vuelta",
-      summary: d.summaries.gaps || "",
-      tips: ["<b>¿Línea plana?</b> → mantiene el ritmo del líder; si sube, lo está perdiendo.",
-             "<b>¿Todas las líneas se comprimen de golpe?</b> → coche de seguridad: el pelotón se reagrupa.",
-             "<b>¿Escalón hacia arriba de ~20s?</b> → pit stop de ese piloto.",
-             "Para enfocar la pelea de cabeza: arrastra un recuadro sobre la zona 0-40s; doble clic vuelve a verlo todo."],
-    });
-    $view.appendChild(cGap.card);
-    Plotly.newPlot(cGap.plot, d.gaps.map((x) => ({
-      type: "scatter", mode: "lines", name: x.code, x: x.laps, y: x.gap,
-      line: { color: x.color, width: 1.8 },
-      hovertemplate: `<b>${x.code}</b> · V%{x}<br>+%{y:.1f}s del líder<extra></extra>`,
-    })), baseLayout({
-      height: 660, shapes: scShapes,
-      margin: { l: 52, r: 14, t: 14, b: 44 },
-      xaxis: { ...baseLayout().xaxis, title: { text: "VUELTA", font: { size: 10 } } },
-      yaxis: { ...baseLayout().yaxis, title: { text: "SEGUNDOS TRAS EL LÍDER", font: { size: 10 } },
-               autorange: "reversed" },
-      legend: { orientation: "h", y: -0.1, font: { size: 10.5 } },
-    }), PLOTLY_CFG);
-    zoomGapPills(cGap.card, cGap.plot);
-    $view.appendChild(el(`<div style="height:18px"></div>`));
-  }
-
-  // MEJORES SECTORES + VUELTA IDEAL
-  if (d.sectors && d.sectors.rows.length) {
-    $view.appendChild(el(`<div class="section-title">Mejores sectores · vuelta ideal
-      <small> · ${d.summaries.sectors || ""}</small></div>`));
-    const fmtS = (row, k) => `<td class="num ${row.best.includes(k) ? "sector-best" : ""}">${row[k].toFixed(3)}</td>`;
-    const secRows = d.sectors.rows.map((r) => `<tr>
-      <td>${drvChip(r.code, r.color)}</td>
-      ${fmtS(r, "s1")}${fmtS(r, "s2")}${fmtS(r, "s3")}
-      <td class="num"><b>${r.ideal}</b></td></tr>`).join("");
-    $view.appendChild(el(`<div class="card table-wrap" style="margin-bottom:18px"><table>
-      <thead><tr><th>Piloto</th><th class="num">S1</th><th class="num">S2</th>
-      <th class="num">S3</th><th class="num">Vuelta ideal</th></tr></thead>
-      <tbody>${secRows}</tbody></table>
-      <div class="chart-summary" style="margin:10px 0 4px">En <span class="sector-best">morado</span>,
-      el mejor sector de todo el campo. La vuelta ideal junta los 3 mejores sectores de cada piloto:
-      si es mucho más rápida que su vuelta real, dejó tiempo en la mesa.</div></div>`));
+  if (stratF.length) {
+    const pitsBy = {};
+    (d.pits || []).forEach((p) => { pitsBy[p.code] = p; });
+    const colBy = {};
+    d.results.forEach((r) => { colBy[r.code] = r.color; });
+    const rowsP = stratF.map((s2) => ({
+      code: s2.code, color: colBy[s2.code] || "#9aa0aa",
+      segs: s2.stints.map((x) => ({ compound: x.compound, color: x.color,
+                                    from: x.from, to: x.to, laps: x.laps })),
+      stops: (pitsBy[s2.code] || {}).stops || [],
+      totalLost: (pitsBy[s2.code] || {}).total_lost ?? null,
+    }));
+    two.appendChild(cardMuroPits({ rows: rowsP, summary: d.summaries.strategy || "" }));
+    two.appendChild(el(`<div style="height:20px"></div>`));
   }
 
   // tabla de resultados
@@ -1670,10 +1576,8 @@ function drawSessionStatsInner(zone, ss, rerender) {
     zone.appendChild(el(`<div style="height:18px"></div>`));
   }
 
-  // MURO DE PITS: estrategia proporcional + paradas con tiempo perdido
+  // MURO DE PITS (componente compartido con CARRERA)
   if (ss.stints && ss.stints.length) {
-    const degMap = {};
-    (ss.deg || []).forEach((r) => { degMap[`${r.code}|${r.from ?? r.stint}`] = r; });
     const degPorStint = {};
     (ss.deg || []).forEach((r) => { degPorStint[`${r.code}|${r.stint}`] = r; });
     const pitsMap = {};
@@ -1683,47 +1587,28 @@ function drawSessionStatsInner(zone, ss, rerender) {
     const conDato = (ss.pits || []).filter((p) => p.total_lost != null && p.stops.length);
     let resumenPits = "";
     if (conDato.length) {
-      const rapida = [...conDato].sort((a, b) => (a.total_lost / a.stops.length) - (b.total_lost / b.stops.length))[0];
-      const lenta = [...conDato].sort((a, b) => (b.total_lost / b.stops.length) - (a.total_lost / a.stops.length))[0];
-      resumenPits = `Parada más eficiente: ${rapida.code} (~${(rapida.total_lost / rapida.stops.length).toFixed(1)}s perdidos por parada). ` +
-                    `La más cara: ${lenta.code} (~${(lenta.total_lost / lenta.stops.length).toFixed(1)}s).`;
+      const porParada = (p) => p.total_lost / p.stops.length;
+      const rapida = [...conDato].sort((a, b) => porParada(a) - porParada(b))[0];
+      const lenta = [...conDato].sort((a, b) => porParada(b) - porParada(a))[0];
+      resumenPits = `Parada más eficiente: ${rapida.code} (~${porParada(rapida).toFixed(1)}s perdidos por parada). ` +
+                    `La más cara: ${lenta.code} (~${porParada(lenta).toFixed(1)}s).`;
     }
 
-    const filas = orden.map((code) => {
-      const segs = ss.stints.filter((x) => x.code === code).sort((a, b) => a.from - b.from);
+    const rows = orden.map((code) => {
+      const segs = ss.stints.filter((x) => x.code === code)
+        .sort((a, b) => a.from - b.from)
+        .map((sg, i) => {
+          const dg = degPorStint[`${code}|${i + 1}`];
+          return { compound: sg.compound, color: sg.color, from: sg.from, to: sg.to,
+            degTxt: dg ? `<em style="color:${dg.slope < 0 ? "#3F7BF0" : dg.slope < 0.05 ? "#2ECC71" : dg.slope < 0.1 ? "#FFC400" : "#FF5252"}">${(dg.slope * 1000).toFixed(0)} ms/v</em>` : "",
+            extraTitle: dg ? ` · mediana ${fmtLap(dg.median)}` : "" };
+        });
       const info = pitsMap[code];
-      const nP = segs.length - 1;
-      const strip = segs.map((sg, i) => {
-        const laps = sg.to - sg.from + 1;
-        const dg = degPorStint[`${code}|${i + 1}`] || Object.values(degPorStint).find((r) => r.code === code && r.stint === i + 1);
-        const dgTxt = dg ? `<em style="color:${dg.slope < 0 ? "#3F7BF0" : dg.slope < 0.05 ? "#2ECC71" : dg.slope < 0.1 ? "#FFC400" : "#FF5252"}">${(dg.slope * 1000).toFixed(0)} ms/v</em>` : "";
-        const stop = info && info.stops[i];
-        const badge = (i < segs.length - 1)
-          ? `<span class="pit-badge" title="Parada en la vuelta ${sg.to}${stop && stop.lost != null ? ` · ~${stop.lost.toFixed(1)}s perdidos` : ""}">V${sg.to}${stop && stop.lost != null ? `<small>+${stop.lost.toFixed(1)}s</small>` : ""}</span>` : "";
-        return `<span class="stint-seg" style="--cc:${sg.color};flex-grow:${laps}"
-          title="${sg.compound} · V${sg.from}-V${sg.to} (${laps} vueltas)${dg ? ` · mediana ${fmtLap(dg.median)}` : ""}">
-          <i></i><b>${sg.compound[0]}</b> ${laps}v ${dgTxt}</span>${badge}`;
-      }).join("");
-      const tot = info && info.total_lost != null ? ` · ~${info.total_lost.toFixed(1)}s en pits` : "";
-      return `<div class="pit-row">
-        <div class="pit-who">${drvChip(code, (ss.cv.find((c) => c.code === code) || {}).color || "#9aa0aa")}
-          <small>${nP} parada${nP === 1 ? "" : "s"}${tot}</small></div>
-        <div class="pit-strip">${strip}</div></div>`;
-    }).join("");
-
-    zone.appendChild(el(`<div class="card chart-card" style="margin-bottom:20px">
-      <div class="chart-head"><h2>Pits y estrategia</h2>
-        <span class="sub">ancho del bloque = vueltas del stint · V## = vuelta de parada · +s = tiempo perdido vs sus vueltas limpias</span></div>
-      <div style="padding:10px 18px 4px">${filas}</div>
-      <div class="compound-legend" style="margin-top:6px">${Object.entries(COMP_COLORS).map(([k, v]) =>
-        `<span class="chip" style="--cc:${v}"><i></i>${k}</span>`).join("")}</div>
-      ${resumenPits ? `<div class="chart-summary">${resumenPits}</div>` : ""}
-      <details class="chart-guide"><summary>¿Cómo leer esta gráfica?</summary><ul>
-        <li><b>¿Paró antes que su rival directo?</b> → intento de undercut: goma nueva para atacar en las vueltas siguientes.</li>
-        <li><b>¿Bloque largo al final?</b> → estiró el stint (overcut) o apostó a un SC tardío.</li>
-        <li><b>¿+s alto en una parada?</b> → parada lenta o tráfico al salir; ahí se pierden posiciones sin pelear.</li>
-        <li>Pasa el cursor por bloques y badges para ver el detalle exacto.</li>
-      </ul></details></div>`));
+      return { code, color: (ss.cv.find((c) => c.code === code) || {}).color || "#9aa0aa",
+               segs, stops: info ? info.stops : [],
+               totalLost: info ? info.total_lost : null };
+    });
+    zone.appendChild(cardMuroPits({ rows, summary: resumenPits }));
   }
 
   // degradación por stint: filtro de compuesto + gráfica + tabla
@@ -1871,6 +1756,39 @@ function linfit(xs, ys) {
   for (let i = 0; i < n; i++) { Sx += xs[i]; Sy += ys[i]; Sxy += xs[i] * ys[i]; Sxx += xs[i] * xs[i]; }
   const b1 = (n * Sxy - Sx * Sy) / (n * Sxx - Sx * Sx);
   return [b1, (Sy - b1 * Sx) / n];
+}
+
+function cardMuroPits({ rows, summary, sub }) {
+  const filas = rows.map((r) => {
+    const strip = r.segs.map((sg, i) => {
+      const laps = sg.laps ?? (sg.to - sg.from + 1);
+      const stop = r.stops && r.stops[i];
+      const badge = (i < r.segs.length - 1)
+        ? `<span class="pit-badge" title="Parada en la vuelta ${sg.to}${stop && stop.lost != null ? ` · ~${stop.lost.toFixed(1)}s perdidos` : ""}">V${sg.to}${stop && stop.lost != null ? `<small>+${stop.lost.toFixed(1)}s</small>` : ""}</span>` : "";
+      return `<span class="stint-seg" style="--cc:${sg.color};flex-grow:${laps}"
+        title="${sg.compound} · V${sg.from}-V${sg.to} (${laps} vueltas)${sg.extraTitle || ""}">
+        <i></i><b>${sg.compound[0]}</b> ${laps}v ${sg.degTxt || ""}</span>${badge}`;
+    }).join("");
+    const nP = r.segs.length - 1;
+    const tot = r.totalLost != null ? ` · ~${r.totalLost.toFixed(1)}s en pits` : "";
+    return `<div class="pit-row">
+      <div class="pit-who">${drvChip(r.code, r.color)}
+        <small>${nP} parada${nP === 1 ? "" : "s"}${tot}</small></div>
+      <div class="pit-strip">${strip}</div></div>`;
+  }).join("");
+  return el(`<div class="card chart-card" style="margin-bottom:20px">
+    <div class="chart-head"><h2>Pits y estrategia</h2>
+      <span class="sub">${sub || "ancho del bloque = vueltas del stint · V## = vuelta de parada · +s = tiempo perdido vs sus vueltas limpias"}</span></div>
+    <div style="padding:10px 18px 4px">${filas}</div>
+    <div class="compound-legend" style="margin-top:6px">${Object.entries(COMP_COLORS).map(([k, v]) =>
+      `<span class="chip" style="--cc:${v}"><i></i>${k}</span>`).join("")}</div>
+    ${summary ? `<div class="chart-summary">${summary}</div>` : ""}
+    <details class="chart-guide"><summary>¿Cómo leer esta gráfica?</summary><ul>
+      <li><b>¿Paró antes que su rival directo?</b> → intento de undercut: goma nueva para atacar en las vueltas siguientes.</li>
+      <li><b>¿Bloque largo al final?</b> → estiró el stint (overcut) o apostó a un SC tardío.</li>
+      <li><b>¿+s alto en una parada?</b> → parada lenta o tráfico al salir; posiciones perdidas sin pelear.</li>
+      <li>Pasa el cursor por bloques y badges para el detalle exacto.</li>
+    </ul></details></div>`);
 }
 
 function zoomGapPills(card, plot) {
