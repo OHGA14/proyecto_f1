@@ -403,20 +403,23 @@ def session_detail(sid):
         con.close()
 
 
-def h2h(code_a, code_b, source="race"):
+def h2h(code_a, code_b, source="race", year=None):
     """Duelo histórico entre dos pilotos: delta de mejor vuelta por GP común
-    (carrera o qualy), duelo de posiciones, sectores y puntos por temporada."""
+    (carrera o qualy), duelo de posiciones, sectores y puntos por temporada.
+    `year` acota a una temporada; None = todas las de la base."""
     import numpy as np
     con = _con()
     try:
+        fy = " AND s.year = ? " if year else " "
+        py = [year] if year else []
         # ── mejor vuelta por GP común (carrera o qualy) ────────────────────
         if source == "quali":
             raw = db.query(con, """
                 SELECT s.year, s.round, s.gp, r.abbr AS driver,
                        r.q1_s, r.q2_s, r.q3_s, r.team
                 FROM results r JOIN sessions s USING(session_id)
-                WHERE s.session = 'Qualifying' AND r.abbr IN (?, ?)""",
-                [code_a, code_b])
+                WHERE s.session = 'Qualifying' AND r.abbr IN (?, ?)""" + fy,
+                [code_a, code_b] + py)
             if not raw.empty:
                 raw["best_s"] = raw[["q1_s", "q2_s", "q3_s"]].min(axis=1, skipna=True)
                 raw = raw.dropna(subset=["best_s"])
@@ -427,8 +430,8 @@ def h2h(code_a, code_b, source="race"):
                        arg_min(l.team, l.time_s) AS team
                 FROM laps l JOIN sessions s USING(session_id)
                 WHERE s.session='Race' AND l.time_s IS NOT NULL AND l.is_accurate
-                  AND l.driver IN (?, ?)
-                GROUP BY 1, 2, 3, 4""", [code_a, code_b])
+                  AND l.driver IN (?, ?)""" + fy + """
+                GROUP BY 1, 2, 3, 4""", [code_a, code_b] + py)
         vacio = {"gps": [], "deltas": [], "outlier": [], "summary": "Sin datos comunes.",
                  "source": source}
         if best.empty:
@@ -460,7 +463,7 @@ def h2h(code_a, code_b, source="race"):
             SELECT s.year, s.round, r.abbr, r.position
             FROM results r JOIN sessions s USING(session_id)
             WHERE s.session='Race' AND r.position IS NOT NULL
-              AND r.abbr IN (?, ?)""", [code_a, code_b])
+              AND r.abbr IN (?, ?)""" + fy, [code_a, code_b] + py)
         ahead_a = ahead_b = 0
         if not posr.empty:
             piv = posr.pivot_table(index=["year", "round"], columns="abbr",
@@ -474,8 +477,8 @@ def h2h(code_a, code_b, source="race"):
             SELECT s.year, s.round, l.driver,
                    MIN(l.s1_s) AS s1, MIN(l.s2_s) AS s2, MIN(l.s3_s) AS s3
             FROM laps l JOIN sessions s USING(session_id)
-            WHERE s.session='Race' AND l.driver IN (?, ?)
-            GROUP BY 1, 2, 3""", [code_a, code_b])
+            WHERE s.session='Race' AND l.driver IN (?, ?)""" + fy + """
+            GROUP BY 1, 2, 3""", [code_a, code_b] + py)
         sectores = None
         if not sec.empty:
             sa = sec[sec["driver"] == code_a]
@@ -503,13 +506,15 @@ def h2h(code_a, code_b, source="race"):
             temporadas.append(fila)
 
         que = "vuelta rápida de carrera" if source == "race" else "mejor vuelta de qualy"
-        summary = (f"En {n} GPs comunes ({que}): {code_a} más rápido en {wins_a}, "
+        alcance = f"temporada {year}" if year else "todas las temporadas de la base"
+        summary = (f"En {n} GPs comunes de {alcance} ({que}): {code_a} más rápido en {wins_a}, "
                    f"{code_b} en {n - wins_a}. Ventaja MEDIANA de {mas}: "
                    f"{abs(mediana):.3f}s (media {abs(media):.3f}s, sin atípicas). "
                    + (f"En pista, {code_a if ahead_a >= ahead_b else code_b} terminó "
                       f"delante {max(ahead_a, ahead_b)}-{min(ahead_a, ahead_b)}."
                       if (ahead_a + ahead_b) else ""))
         return {"gps": gps, "deltas": deltas, "outlier": outlier, "source": source,
+                "year": year, "alcance": alcance,
                 "a": {"code": code_a, "name": driver_name(code_a), "color": col_a,
                       "wins": wins_a, "ahead": ahead_a},
                 "b": {"code": code_b, "name": driver_name(code_b), "color": col_b,

@@ -378,19 +378,37 @@ async function viewH2H() {
   };
 
   if (!state.h2hSource) state.h2hSource = "race";
-  const srcTg = el(`<div class="pills" style="margin-bottom:18px">
-    <button class="pill ${state.h2hSource === "race" ? "active" : ""}">CARRERA (mejor vuelta)</button>
-    <button class="pill ${state.h2hSource === "quali" ? "active" : ""}">QUALY (a una vuelta)</button></div>`);
-  const [sr, sq] = srcTg.querySelectorAll("button");
-  sr.onclick = () => { state.h2hSource = "race"; viewH2H(); };
-  sq.onclick = () => { state.h2hSource = "quali"; viewH2H(); };
-  $view.appendChild(srcTg);
+  const anios = (state.seasons || []).map((x) => x.year);
+  const filtros = el(`<div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;margin-bottom:16px">
+    <span class="pills">
+      <button class="pill ${!state.h2hYear ? "active" : ""}" data-y="">TODAS</button>
+      ${anios.map((y) => `<button class="pill ${state.h2hYear === y ? "active" : ""}" data-y="${y}">${y}</button>`).join("")}
+    </span>
+    <span class="pills">
+      <button class="pill ${state.h2hSource === "race" ? "active" : ""}" data-s="race">CARRERA (mejor vuelta)</button>
+      <button class="pill ${state.h2hSource === "quali" ? "active" : ""}" data-s="quali">QUALY (a una vuelta)</button>
+    </span></div>`);
+  filtros.querySelectorAll("[data-y]").forEach((b) => {
+    b.onclick = () => { state.h2hYear = b.dataset.y ? +b.dataset.y : null; viewH2H(); };
+  });
+  filtros.querySelectorAll("[data-s]").forEach((b) => {
+    b.onclick = () => { state.h2hSource = b.dataset.s; viewH2H(); };
+  });
+  $view.appendChild(filtros);
 
   if (window._h2hA === window._h2hB) {
     $view.appendChild(el(`<div class="empty">Elige dos pilotos distintos.</div>`));
     return;
   }
-  const d = await api(`/h2h?a=${window._h2hA}&b=${window._h2hB}&source=${state.h2hSource}`);
+  const d = await api(`/h2h?a=${window._h2hA}&b=${window._h2hB}&source=${state.h2hSource}`
+                      + (state.h2hYear ? `&year=${state.h2hYear}` : ""));
+
+  // ¿qué estás viendo? — el alcance y la métrica, sin ambigüedad
+  $view.appendChild(el(`<div class="chart-summary" style="margin:0 0 18px">
+    <b>¿Qué comparas aquí?</b> A ${d.a ? d.a.code : window._h2hA} y ${d.b ? d.b.code : window._h2hB}
+    en <b>cada Gran Premio que corrieron juntos</b> (${d.alcance || "todas las temporadas de la base"}).
+    Cada barra = un GP; su altura = la diferencia entre <b>la mejor vuelta de cada uno</b>
+    ${state.h2hSource === "quali" ? "en la clasificación (Q1-Q3)" : "en la carrera"} de ese fin de semana.</div>`));
   if (!d.deltas.length) {
     $view.appendChild(el(`<div class="empty">${d.summary}</div>`));
     return;
