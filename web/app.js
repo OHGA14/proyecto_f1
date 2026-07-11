@@ -67,6 +67,20 @@ const heroTitle = (t, sub) =>
 const drvChip = (code, color, name = "") =>
   `<span class="drv" style="--cc:${color}"><i></i>${code}${name ? ` <small>${name}</small>` : ""}</span>`;
 
+/* bandera del gran premio, por nombre del GP (cubre calendarios 2018-2026) */
+const BANDERAS = [
+  [/bahrain|sakhir/i, "🇧🇭"], [/saudi/i, "🇸🇦"], [/australia/i, "🇦🇺"],
+  [/japan/i, "🇯🇵"], [/chin/i, "🇨🇳"], [/miami|united states|vegas/i, "🇺🇸"],
+  [/emilia|italian|tuscan/i, "🇮🇹"], [/monaco/i, "🇲🇨"], [/canad/i, "🇨🇦"],
+  [/spanish|spain|madrid|barcelona/i, "🇪🇸"], [/austria|styria/i, "🇦🇹"],
+  [/british|great britain|70th/i, "🇬🇧"], [/hungar/i, "🇭🇺"], [/belgia/i, "🇧🇪"],
+  [/dutch|netherlands/i, "🇳🇱"], [/azerbaijan|baku/i, "🇦🇿"], [/singapore/i, "🇸🇬"],
+  [/mexic/i, "🇲🇽"], [/paulo|brazil/i, "🇧🇷"], [/qatar/i, "🇶🇦"],
+  [/abu dhabi/i, "🇦🇪"], [/french|france/i, "🇫🇷"], [/german|eifel/i, "🇩🇪"],
+  [/portug/i, "🇵🇹"], [/turk/i, "🇹🇷"], [/russia/i, "🇷🇺"], [/europe/i, "🇪🇺"],
+];
+const banderaGP = (gp) => (BANDERAS.find(([re]) => re.test(gp || "")) || [0, "🏁"])[1];
+
 function seasonPills(active, onPick) {
   const wrap = el(`<div class="pills" style="margin-bottom:18px"></div>`);
   state.seasons.forEach((s) => {
@@ -194,8 +208,8 @@ async function viewCarrera() {
   skeleton([46, 200]);
   const races = await api(`/races/${state.year}`);
   $view.innerHTML = "";
-  $view.appendChild(heroTitle("Carrera", "elige un gran premio · las gráficas obedecen a tus pilotos"));
-  $view.appendChild(seasonPills(state.year, (y) => { state.year = y; state.sid = null; viewCarrera(); }));
+  $view.appendChild(heroTitle("Carrera", "elige un gran premio · arranca con su podio y suma los pilotos que quieras"));
+  $view.appendChild(seasonPills(state.year, (y) => { state.year = y; state.sid = null; state.carSel = null; viewCarrera(); }));
 
   if (!races.length) {
     $view.appendChild(el(`<div class="empty">No hay carreras de ${state.year} en la base.</div>`));
@@ -206,12 +220,12 @@ async function viewCarrera() {
   const grid = el(`<div class="race-grid" style="margin-bottom:22px"></div>`);
   races.forEach((r) => {
     const c = el(`<div class="card race-card" style="${r.sid === state.sid ? "border-color:rgba(255,60,60,.55)" : ""}">
-      <div class="round">RONDA ${r.round}</div><h3>${r.label}</h3>
+      <div class="round">RONDA ${r.round}</div><h3>${banderaGP(r.label)} ${r.label}</h3>
       <div class="date">${r.date} · ${r.n_laps} vueltas</div>
       <div class="podium">${r.podium.map((p, i) =>
         `<span class="chip" style="--cc:${p.color}"><i></i>P${i + 1} ${p.code}</span>`).join("")}</div>
     </div>`);
-    c.onclick = () => { state.sid = r.sid; viewCarrera(); };
+    c.onclick = () => { state.sid = r.sid; state.carSel = null; viewCarrera(); };
     grid.appendChild(c);
   });
   $view.appendChild(grid);
@@ -219,7 +233,7 @@ async function viewCarrera() {
   const d = await api(`/session/detail?sid=${encodeURIComponent(state.sid)}`);
 
   // podio hero
-  $view.appendChild(el(`<div class="section-title">${d.info.gp} ${d.info.year}
+  $view.appendChild(el(`<div class="section-title">${banderaGP(d.info.gp)} ${d.info.gp} ${d.info.year}
     <small> · ${d.info.date} · ${d.info.n_laps} vueltas · ${d.info.circuit}</small></div>`));
   const podium = d.results.slice(0, 3);
   $view.appendChild(el(`<div class="podium-hero" style="margin-bottom:18px">${podium.map((p) => `
@@ -230,13 +244,13 @@ async function viewCarrera() {
   // chips de pilotos: despejan TODAS las gráficas de la carrera
   const codesR = d.results.map((r) => r.code);
   if (!state.carSel || !state.carSel.some((c) => codesR.includes(c)))
-    state.carSel = codesR.slice(0, 10);
+    state.carSel = codesR.slice(0, 3);          // al elegir GP: su podio P1-P2-P3
   const selC = new Set(state.carSel.filter((c) => codesR.includes(c)));
   const F = (arr) => (arr || []).filter((x) => selC.has(x.code));
   const chipsR = el(`<div class="card" style="margin-bottom:18px">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">
       <span style="font-size:10px;letter-spacing:2px;color:var(--ink3);font-weight:700">
-        PILOTOS EN LAS GRÁFICAS · la tabla de resultados siempre muestra a todos</span>
+        PILOTOS EN LAS GRÁFICAS · arrancas con el podio · la tabla siempre muestra a todos</span>
       <span class="pills">
         <button class="pill" data-n="3">TOP 3</button>
         <button class="pill" data-n="5">TOP 5</button>
@@ -555,7 +569,7 @@ async function viewAnalisis() {
       state.telGp = (conCache || evs[evs.length - 1]).gp;
     }
     selGp.innerHTML = evs.map((e) =>
-      `<option value="${e.gp}" ${e.gp === state.telGp ? "selected" : ""}>R${e.round} · ${e.gp.replace(" Grand Prix", "")}${e.sessions.some((x) => x.cached) ? " ●" : ""}</option>`).join("");
+      `<option value="${e.gp}" ${e.gp === state.telGp ? "selected" : ""}>R${e.round} · ${banderaGP(e.gp)} ${e.gp.replace(" Grand Prix", "")}${e.sessions.some((x) => x.cached) ? " ●" : ""}</option>`).join("");
     fillSes(evs);
   };
   selYear.onchange = () => { state.telYear = +selYear.value; state.telGp = null; state.telSes = null; fillGp(); };
@@ -765,6 +779,60 @@ function drawTelCharts(zone, d) {
   const lapLabels = d.drivers.map((x) => `${x.code} ${x.lap_label} (V${x.lap_number})`).join(" · ");
 
   zone.appendChild(el(`<div class="section-title" id="sec-tel">Telemetría de vuelta</div>`));
+
+  // circuito: trazado real por GPS coloreado por velocidad (vuelta de referencia)
+  const refC = d.drivers[0];
+  if (refC && refC.x && refC.x.length > 10) {
+    const vmax = Math.max(...refC.speed), vmin = Math.min(...refC.speed);
+    const iMin = refC.speed.indexOf(vmin);
+    let curvaLenta = null;
+    if ((d.corners || []).length) {
+      const dm = refC.d[iMin];
+      curvaLenta = d.corners.reduce((a, c) =>
+        Math.abs(c.d - dm) < Math.abs(a.d - dm) ? c : a);
+    }
+    const cCir = chartCard({
+      title: "Circuito · mapa de velocidad",
+      sub: `trazado real por GPS · vuelta de referencia de ${refC.code} (V${refC.lap_number})`,
+      summary: `Punta de ${Math.round(vmax)} km/h y punto más lento a ${Math.round(vmin)} km/h${curvaLenta ? ` (curva ${curvaLenta.n})` : ""}. El color enseña dónde el coche vuela y dónde se arrastra.`,
+      tips: ["<b>¿Azul hielo?</b> → fondo plano: ahí mandan el motor y el ala pequeña.",
+             "<b>¿Rojo?</b> → curvas lentas: ahí se gana o se pierde la vuelta, con tracción y frenada.",
+             "Los números son las curvas oficiales; el rombo blanco es la línea de meta y la flecha marca el sentido de giro.",
+             "Crúzalo con el mapa de dominancia: quien gana los tramos rojos tiene el coche 'mecánico'; quien gana los azules, el aerodinámico."],
+    });
+    zone.appendChild(cCir.card);
+    zone.appendChild(el(`<div style="height:18px"></div>`));
+    const nC = refC.x.length;
+    const iA = Math.floor(nC * 0.03), iB = Math.floor(nC * 0.055);
+    Plotly.newPlot(cCir.plot, [
+      { type: "scatter", mode: "lines", x: refC.x, y: refC.y, hoverinfo: "skip",
+        showlegend: false, line: { color: "rgba(255,255,255,.07)", width: 11 } },
+      { type: "scatter", mode: "markers", x: refC.x, y: refC.y, showlegend: false,
+        marker: { size: 5, color: refC.speed,
+                  colorscale: [[0, "#E0243F"], [0.5, "#FFC400"], [1, "#38bdf8"]],
+                  colorbar: { orientation: "h", y: -0.1, thickness: 10, outlinewidth: 0,
+                              title: { text: "VELOCIDAD (KM/H)", font: { size: 9.5, color: "#8a919e" }, side: "bottom" },
+                              tickfont: { size: 9.5, color: "#8a919e" } } },
+        hovertemplate: "%{marker.color:.0f} km/h<extra></extra>" },
+      { type: "scatter", mode: "markers+text", x: [refC.x[0]], y: [refC.y[0]],
+        showlegend: false, hoverinfo: "skip",
+        marker: { size: 11, color: "#e8eaed", symbol: "diamond",
+                  line: { color: "#11141b", width: 1.5 } },
+        text: ["META"], textposition: "top center",
+        textfont: { size: 9, color: "#8a919e" } },
+    ], baseLayout({
+      height: 620, margin: { l: 10, r: 10, t: 10, b: 10 },
+      xaxis: { visible: false }, yaxis: { visible: false, scaleanchor: "x" },
+      annotations: [
+        ...(d.corners || []).map((c) => ({ x: c.x, y: c.y, text: String(c.n),
+          showarrow: false, font: { size: 10, color: "#8a919e" } })),
+        { x: refC.x[iB], y: refC.y[iB], ax: refC.x[iA], ay: refC.y[iA],
+          axref: "x", ayref: "y", text: "", showarrow: true, arrowhead: 2,
+          arrowsize: 1.3, arrowwidth: 1.6, arrowcolor: "#e8eaed" },
+      ],
+    }), PLOTLY_CFG);
+  }
+
   if (d.dtw && d.dtw.length) {
     zone.appendChild(el(`<div class="card" style="margin-bottom:18px">
       <div class="chart-head" style="padding:0 0 4px"><h2>Similitud DTW · ¿qué tan parecidas son las vueltas?</h2>
