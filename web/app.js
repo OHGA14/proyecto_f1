@@ -313,14 +313,13 @@ async function viewCarrera() {
 
   // GAP AL LÍDER
   if (d.gaps && d.gaps.length) {
-    const flat = d.gaps.flatMap((g) => g.gap).sort((a, b) => a - b);
-    const cap = flat[Math.floor(flat.length * 0.93)] || 60;
     const cGap = chartCard({
       title: "Gap al líder", sub: "segundos detrás del primero, vuelta a vuelta",
       summary: d.summaries.gaps || "",
       tips: ["<b>¿Línea plana?</b> → mantiene el ritmo del líder; si sube, lo está perdiendo.",
              "<b>¿Todas las líneas se comprimen de golpe?</b> → coche de seguridad: el pelotón se reagrupa.",
-             "<b>¿Escalón hacia arriba de ~20s?</b> → pit stop de ese piloto."],
+             "<b>¿Escalón hacia arriba de ~20s?</b> → pit stop de ese piloto.",
+             "Para enfocar la pelea de cabeza: arrastra un recuadro sobre la zona 0-40s; doble clic vuelve a verlo todo."],
     });
     $view.appendChild(cGap.card);
     Plotly.newPlot(cGap.plot, d.gaps.map((x) => ({
@@ -328,13 +327,14 @@ async function viewCarrera() {
       line: { color: x.color, width: 1.8 },
       hovertemplate: `<b>${x.code}</b> · V%{x}<br>+%{y:.1f}s del líder<extra></extra>`,
     })), baseLayout({
-      height: 560, shapes: scShapes,
+      height: 660, shapes: scShapes,
       margin: { l: 52, r: 14, t: 14, b: 44 },
       xaxis: { ...baseLayout().xaxis, title: { text: "VUELTA", font: { size: 10 } } },
       yaxis: { ...baseLayout().yaxis, title: { text: "SEGUNDOS TRAS EL LÍDER", font: { size: 10 } },
-               range: [cap, -2] },
+               autorange: "reversed" },
       legend: { orientation: "h", y: -0.1, font: { size: 10.5 } },
     }), PLOTLY_CFG);
+    zoomGapPills(cGap.card, cGap.plot);
     $view.appendChild(el(`<div style="height:18px"></div>`));
   }
 
@@ -1484,8 +1484,6 @@ function drawSessionStatsInner(zone, ss, rerender) {
     }), PLOTLY_CFG);
 
     if (ss.gaps && ss.gaps.length) {
-      const flat = ss.gaps.flatMap((g) => g.gap).sort((a, b) => a - b);
-      const cap = flat[Math.floor(flat.length * 0.93)] || 60;
       const cGp = chartCard({
         title: "Gap al líder", sub: "segundos detrás del primero",
         tips: ["<b>¿Se comprimen todas las líneas?</b> → coche de seguridad: el pelotón se reagrupa.",
@@ -1498,13 +1496,14 @@ function drawSessionStatsInner(zone, ss, rerender) {
         line: { color: x.color, width: 2 },
         hovertemplate: `<b>${x.code}</b> · V%{x}<br>+%{y:.1f}s<extra></extra>`,
       })), baseLayout({
-        height: 520, shapes: scShapesLap,
+        height: 660, shapes: scShapesLap,
         margin: { l: 52, r: 14, t: 14, b: 44 },
         xaxis: { ...baseLayout().xaxis, title: { text: "VUELTA", font: { size: 10 } } },
         yaxis: { ...baseLayout().yaxis, title: { text: "SEGUNDOS TRAS EL LÍDER", font: { size: 10 } },
-                 range: [cap, -2] },
+                 autorange: "reversed" },
         legend: { orientation: "h", y: -0.1, font: { size: 10.5 } },
       }), PLOTLY_CFG);
+      zoomGapPills(cGp.card, cGp.plot);
     }
   }
 
@@ -1772,6 +1771,24 @@ function drawSessionStatsInner(zone, ss, rerender) {
       <div class="table-wrap" style="margin-top:12px;max-height:560px;overflow:auto">
       <table><thead>${head}</thead><tbody>${rows}</tbody></table></div></details>`));
   }
+}
+
+function zoomGapPills(card, plot) {
+  const z = el(`<div class="pills" style="padding:0 18px 12px">
+    <button class="pill active">TODO</button>
+    <button class="pill">CABEZA · 0-60s</button>
+    <button class="pill">0-180s</button></div>`);
+  card.insertBefore(z, card.querySelector(".chart-summary") || card.querySelector(".chart-guide"));
+  const set = (rango, btn) => {
+    z.querySelectorAll(".pill").forEach((p) => p.classList.remove("active"));
+    btn.classList.add("active");
+    Plotly.relayout(plot, rango ? { "yaxis.range": rango }
+                                : { "yaxis.autorange": "reversed" });
+  };
+  const [b1, b2, b3] = z.querySelectorAll("button");
+  b1.onclick = () => set(null, b1);
+  b2.onclick = () => set([60, -2], b2);
+  b3.onclick = () => set([180, -2], b3);
 }
 
 /* ───────────────────────────── vista EQUIPOS (evolución de la temporada) */
