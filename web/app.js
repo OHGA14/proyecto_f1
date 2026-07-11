@@ -222,15 +222,46 @@ async function viewCarrera() {
       <div class="code">${p.code}</div><div class="name">${p.name}</div>
       <div class="team">${p.team} · mejor vuelta ${p.best_lap}</div></div>`).join("")}</div>`));
 
-  const two = el(`<div class="grid cols-2" style="margin-bottom:18px"></div>`);
-  $view.appendChild(two);
+  // chips de pilotos: despejan TODAS las gráficas de la carrera
+  const codesR = d.results.map((r) => r.code);
+  if (!state.carSel || !state.carSel.some((c) => codesR.includes(c)))
+    state.carSel = codesR.slice(0, 10);
+  const selC = new Set(state.carSel.filter((c) => codesR.includes(c)));
+  const F = (arr) => (arr || []).filter((x) => selC.has(x.code));
+  const chipsR = el(`<div class="card" style="margin-bottom:18px">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">
+      <span style="font-size:10px;letter-spacing:2px;color:var(--ink3);font-weight:700">
+        PILOTOS EN LAS GRÁFICAS · la tabla de resultados siempre muestra a todos</span>
+      <span class="pills">
+        <button class="pill" data-n="3">TOP 3</button>
+        <button class="pill" data-n="5">TOP 5</button>
+        <button class="pill" data-n="10">TOP 10</button>
+        <button class="pill" data-n="99">TODOS</button></span></div>
+    <div class="drv-chips"></div></div>`);
+  chipsR.querySelectorAll("[data-n]").forEach((b) => {
+    b.onclick = () => { state.carSel = codesR.slice(0, +b.dataset.n); viewCarrera(); };
+  });
+  const wrapR = chipsR.querySelector(".drv-chips");
+  d.results.forEach((r) => {
+    const on = selC.has(r.code);
+    const chip = el(`<span class="drv-chip ${on ? "on" : ""}" style="--cc:${r.color}"
+      title="${r.name} · P${r.pos}"><i></i>${r.code}</span>`);
+    chip.onclick = () => {
+      let sel = state.carSel.filter((c) => codesR.includes(c));
+      if (sel.includes(r.code)) { if (sel.length > 1) sel = sel.filter((c) => c !== r.code); }
+      else sel.push(r.code);
+      state.carSel = sel;
+      viewCarrera();
+    };
+    wrapR.appendChild(chip);
+  });
+  $view.appendChild(chipsR);
 
-  // ritmo (top 10 de la clasificación final)
-  const top10 = new Set(d.results.slice(0, 10).map((r) => r.code));
-  const pace = d.pace.filter((p) => top10.has(p.code));
+  const two = $view;  // las gráficas van a ANCHO COMPLETO, una tras otra
+  const pace = F(d.pace);
   const allT = pace.flatMap((p) => p.times);
   const c1 = chartCard({
-    title: "Ritmo vuelta a vuelta", sub: "top 10 final · sin vueltas de pits",
+    title: "Ritmo vuelta a vuelta", sub: "pilotos seleccionados · sin vueltas de pits",
     summary: d.summaries.pace || "",
     tips: [
       "<b>¿Una línea consistentemente abajo?</b> → ese piloto tenía el mejor ritmo de carrera.",
@@ -239,6 +270,7 @@ async function viewCarrera() {
     ],
   });
   two.appendChild(c1.card);
+  two.appendChild(el(`<div style="height:20px"></div>`));
   const tmin = Math.min(...allT), tmax = Math.max(...allT);
   const ticks = [];
   for (let t = Math.ceil(tmin); t <= tmax; t += Math.max(1, Math.round((tmax - tmin) / 5))) ticks.push(t);
@@ -248,7 +280,7 @@ async function viewCarrera() {
     hovertemplate: `<b>${p.code}</b> · V%{x}<br>%{customdata}<extra></extra>`,
     customdata: p.times.map(fmtLap),
   })), baseLayout({
-    height: 380, margin: { l: 64, r: 16, t: 16, b: 40 },
+    height: 560, margin: { l: 64, r: 16, t: 16, b: 40 },
     xaxis: { ...baseLayout().xaxis, title: { text: "VUELTA", font: { size: 10 } } },
     yaxis: { ...baseLayout().yaxis, tickvals: ticks, ticktext: ticks.map(fmtLap) },
     legend: { orientation: "h", y: -0.18, font: { size: 10.5 } },
@@ -268,15 +300,18 @@ async function viewCarrera() {
       `<span class="chip" style="--cc:${(d.strategy.flatMap((s) => s.stints).find((x) => x.compound === c) || {}).color}"><i></i>${c}</span>`).join("")}</div>`,
   });
   two.appendChild(c2.card);
-  const order = d.strategy.map((s) => s.code);
-  const bars = d.strategy.flatMap((s) => s.stints.map((st) => ({
+  two.appendChild(el(`<div style="height:20px"></div>`));
+  const stratF = F(d.strategy);
+  const order = stratF.map((s) => s.code);
+  const bars = stratF.flatMap((s) => s.stints.map((st) => ({
     y: [s.code], base: [st.from - 1], x: [st.to - st.from + 1],
-    type: "bar", orientation: "h", marker: { color: st.color, line: { color: "#11141b", width: 2 } },
+    type: "bar", orientation: "h", width: 0.55,
+    marker: { color: st.color, line: { color: "#11141b", width: 2 } },
     hovertemplate: `<b>${s.code}</b> · ${st.compound}<br>V${st.from}–V${st.to} (${st.laps} vueltas)<extra></extra>`,
     showlegend: false,
   })));
   Plotly.newPlot(c2.plot, bars, baseLayout({
-    height: Math.max(340, order.length * 17 + 90), barmode: "stack", bargap: 0.35,
+    height: Math.max(240, order.length * 30 + 150), barmode: "stack",
     margin: { l: 52, r: 16, t: 16, b: 40 },
     xaxis: { ...baseLayout().xaxis, title: { text: "VUELTA", font: { size: 10 } } },
     yaxis: { ...baseLayout().yaxis, categoryorder: "array",
@@ -290,6 +325,10 @@ async function viewCarrera() {
   }));
 
   // LAP CHART: posición vuelta a vuelta
+  d.laps_chart = F(d.laps_chart);
+  d.gaps = F(d.gaps);
+  d.speedtrap = F(d.speedtrap);
+  if (d.sectors) d.sectors.rows = d.sectors.rows.filter((r) => selC.has(r.code));
   if (d.laps_chart && d.laps_chart.length) {
     const cLap = chartCard({
       title: "Lap chart · posición vuelta a vuelta", sub: "bandas grises = SC/VSC",
@@ -1632,11 +1671,11 @@ function drawSessionStatsInner(zone, ss, rerender) {
     zone.appendChild(el(`<div style="height:20px"></div>`));
     Plotly.newPlot(cGt.plot, ss.stints.map((st) => ({
       type: "bar", orientation: "h", y: [st.code], base: [st.from - 1],
-      x: [st.to - st.from + 1], showlegend: false,
+      x: [st.to - st.from + 1], showlegend: false, width: 0.5,
       marker: { color: st.color, line: { color: "#11141b", width: 2 } },
       hovertemplate: `<b>${st.code}</b> · ${st.compound}<br>V${st.from}–V${st.to}<extra></extra>`,
     })), baseLayout({
-      height: Math.max(300, orden.length * 34 + 120), barmode: "stack", bargap: 0.35,
+      height: Math.max(220, orden.length * 46 + 140), barmode: "stack",
       margin: { l: 52, r: 16, t: 14, b: 44 },
       xaxis: { ...baseLayout().xaxis, title: { text: "VUELTA", font: { size: 10 } } },
       yaxis: { ...baseLayout().yaxis, categoryorder: "array",
