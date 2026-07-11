@@ -1507,28 +1507,44 @@ function drawSessionStatsInner(zone, ss, rerender) {
     }
   }
 
-  // fila: boxplot + tabla de consistencia
-  const rowB = el(`<div class="grid cols-2" style="margin-bottom:18px"></div>`);
-  zone.appendChild(rowB);
+  // DISTRIBUCIÓN DE RITMO: ancho completo, ordenado por mediana
   if (ss.box.length) {
+    const med = (arr) => { const a = [...arr].sort((x, y) => x - y);
+      return a.length % 2 ? a[(a.length - 1) / 2] : (a[a.length / 2 - 1] + a[a.length / 2]) / 2; };
+    const orden = [...ss.box].sort((a, b) => med(a.times) - med(b.times));
     const cBox = chartCard({
-      title: "Distribución de ritmo", sub: "filtrado robusto IQR · sin pits ni atípicas",
+      title: "Distribución de ritmo",
+      sub: "ordenado por mediana · cada punto = una vuelta limpia · línea punteada = promedio",
       tips: ["<b>¿Caja pequeña?</b> → piloto metrónomo: casi todas sus vueltas son iguales.",
              "<b>¿Caja baja pero larga?</b> → rápido pero irregular; la mediana (línea central) es su ritmo real.",
+             "<b>¿Puntos sueltos lejos de la caja?</b> → vueltas raras que sobrevivieron al filtro: tráfico o goma muerta.",
              "Comparar MEDIANAS es más honesto que comparar la mejor vuelta."],
     });
-    rowB.appendChild(cBox.card);
+    zone.appendChild(cBox.card);
+    zone.appendChild(el(`<div style="height:20px"></div>`));
     const tt = timeTicks(ss.box.flatMap((b) => b.times));
-    Plotly.newPlot(cBox.plot, ss.box.map((b) => ({
-      type: "box", y: b.times, name: b.code, boxpoints: false,
-      marker: { color: b.color }, line: { color: b.color, width: 1.8 },
-      fillcolor: "rgba(0,0,0,0)",
+    Plotly.newPlot(cBox.plot, orden.map((b) => ({
+      type: "box", y: b.times, name: b.code,
+      boxpoints: "all", jitter: 0.55, pointpos: 0, boxmean: true, width: 0.55,
+      marker: { color: rgba(b.color, 0.4), size: 3.8 },
+      line: { color: b.color, width: 2.2 },
+      fillcolor: rgba(b.color, 0.13),
+      customdata: b.times.map(fmtLap),
+      hovertemplate: `<b>${b.code}</b> · %{customdata}<extra></extra>`,
     })), baseLayout({
-      height: 460, showlegend: false,
-      margin: { l: 64, r: 14, t: 14, b: 44 },
+      height: 620, showlegend: false,
+      annotations: orden.map((b) => ({
+        x: b.code, y: med(b.times), yshift: 16, showarrow: false,
+        text: fmtLap(med(b.times)),
+        font: { size: 10.5, color: b.color, family: "Inter" },
+      })),
+      margin: { l: 64, r: 14, t: 26, b: 44 },
+      xaxis: { ...baseLayout().xaxis, tickfont: { size: 11.5 } },
       yaxis: { ...baseLayout().yaxis, ...tt },
     }), PLOTLY_CFG);
   }
+
+  // CONSISTENCIA (CV): tabla a lo ancho
   if (ss.cv.length) {
     const badge = (v) => v < 0.9 ? ["#2ECC71", "Estable"] : v < 1.3 ? ["#FFC400", "Media"] : ["#FF5252", "Variable"];
     const rows = ss.cv.map((r) => {
@@ -1538,7 +1554,8 @@ function drawSessionStatsInner(zone, ss, rerender) {
         <td class="num">${r.iqr.toFixed(3)}</td>
         <td class="num"><b style="color:${c}">${r.cv.toFixed(2)}%</b> <small style="color:${c}">${t}</small></td></tr>`;
     }).join("");
-    rowB.appendChild(el(`<div class="card table-wrap"><div class="chart-head" style="padding:0 0 8px">
+    zone.appendChild(el(`<div class="card table-wrap" style="margin-bottom:20px">
+      <div class="chart-head" style="padding:0 0 8px">
       <h2>Consistencia (CV)</h2><span class="sub">CV = σ / mediana · menor = más regular</span></div>
       <table><thead><tr><th>Piloto</th><th class="num">Vueltas</th><th class="num">Mediana</th>
       <th class="num">σ</th><th class="num">IQR</th><th class="num">CV</th></tr></thead>
@@ -1773,6 +1790,20 @@ function drawSessionStatsInner(zone, ss, rerender) {
   }
 }
 
+function rgba(hex, a) {
+  const r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16),
+        b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r},${g},${b},${a})`;
+}
+
+function linfit(xs, ys) {
+  const n = xs.length;
+  let Sx = 0, Sy = 0, Sxy = 0, Sxx = 0;
+  for (let i = 0; i < n; i++) { Sx += xs[i]; Sy += ys[i]; Sxy += xs[i] * ys[i]; Sxx += xs[i] * xs[i]; }
+  const b1 = (n * Sxy - Sx * Sy) / (n * Sxx - Sx * Sx);
+  return [b1, (Sy - b1 * Sx) / n];
+}
+
 function zoomGapPills(card, plot) {
   const z = el(`<div class="pills" style="padding:0 18px 12px">
     <button class="pill active">TODO</button>
@@ -1792,20 +1823,84 @@ function zoomGapPills(card, plot) {
 }
 
 /* ───────────────────────────── vista EQUIPOS (evolución de la temporada) */
+function filtrarEquipos(raw, selSet) {
+  const teams = raw.teams.filter((t) => selSet.has(t.team));
+  const completo = teams.length === raw.teams.length;
+  let conv = completo ? raw.conv : null;
+  if (!completo && teams.length >= 3) {
+    // recalcula la convergencia SOLO con los equipos elegidos
+    const rs = [], sig = [];
+    raw.rounds.forEach((r, i) => {
+      const vals = teams.map((t) => t.deficit[i]).filter((v) => v != null);
+      if (vals.length >= 3) {
+        const m = vals.reduce((a, b) => a + b, 0) / vals.length;
+        sig.push(+Math.sqrt(vals.reduce((a, v) => a + (v - m) ** 2, 0) / (vals.length - 1)).toFixed(3));
+        rs.push(r);
+      }
+    });
+    if (sig.length >= 3) {
+      const [b1, b0] = linfit(rs, sig);
+      conv = { rounds: rs, sigma: sig, trend: rs.map((r) => +(b0 + b1 * r).toFixed(3)),
+               slope: +b1.toFixed(4) };
+    }
+  }
+  let huella = raw.huella;
+  if (huella && !completo) {
+    const keep = huella.teams.map((t, i) => [t, i]).filter(([t]) => selSet.has(t));
+    huella = { ...huella, teams: keep.map(([t]) => t), z: keep.map(([, i]) => huella.z[i]) };
+  }
+  return { ...raw, teams, conv, huella, _completo: completo };
+}
+
 async function viewEquipos() {
   skeleton([46, 120, 500]);
   if (!state.teamSource) state.teamSource = "quali";
-  const d = await api(`/teams/${state.year}?source=${state.teamSource}`);
+  state._tcache = state._tcache || {};
+  const key = `${state.year}|${state.teamSource}`;
+  const raw = state._tcache[key] || (state._tcache[key] =
+    await api(`/teams/${state.year}?source=${state.teamSource}`));
   $view.innerHTML = "";
-  $view.appendChild(seasonPills(state.year, (y) => { state.year = y; viewEquipos(); }));
+  $view.appendChild(seasonPills(state.year, (y) => { state.year = y; state.teamSel = null; viewEquipos(); }));
 
-  const src = el(`<div class="pills" style="margin-bottom:18px">
+  const src = el(`<div class="pills" style="margin-bottom:14px">
     <button class="pill ${state.teamSource === "quali" ? "active" : ""}">QUALY (potencial a 1 vuelta)</button>
     <button class="pill ${state.teamSource === "race" ? "active" : ""}">CARRERA (mejor vuelta)</button></div>`);
   const [bq, br] = src.querySelectorAll("button");
   bq.onclick = () => { state.teamSource = "quali"; viewEquipos(); };
   br.onclick = () => { state.teamSource = "race"; viewEquipos(); };
   $view.appendChild(src);
+
+  // chips de equipos: elige uno o varios para el análisis
+  const todos = raw.teams.map((t) => t.team);
+  const selArr = (state.teamSel && state.teamSel.length)
+    ? state.teamSel.filter((t) => todos.includes(t)) : [...todos];
+  const selSet = new Set(selArr);
+  if (raw.teams.length) {
+    const chipsCard = el(`<div class="card" style="margin-bottom:18px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">
+        <span style="font-size:10px;letter-spacing:2px;color:var(--ink3);font-weight:700">
+          EQUIPOS · elige uno o varios para el análisis</span>
+        <button class="pill" id="teamTodos">TODOS</button></div>
+      <div class="drv-chips"></div></div>`);
+    const wrap = chipsCard.querySelector(".drv-chips");
+    raw.teams.forEach((t) => {
+      const on = selSet.has(t.team);
+      const chip = el(`<span class="drv-chip ${on ? "on" : ""}" style="--cc:${t.color}">
+        <i></i>${t.team}</span>`);
+      chip.onclick = () => {
+        let sel = [...selArr];
+        if (sel.includes(t.team)) { if (sel.length > 1) sel = sel.filter((x) => x !== t.team); }
+        else sel.push(t.team);
+        state.teamSel = sel.length === todos.length ? null : sel;
+        viewEquipos();
+      };
+      wrap.appendChild(chip);
+    });
+    chipsCard.querySelector("#teamTodos").onclick = () => { state.teamSel = null; viewEquipos(); };
+    $view.appendChild(chipsCard);
+  }
+
+  const d = filtrarEquipos(raw, selSet);
 
   if (!d.teams.length) {
     $view.appendChild(el(`<div class="empty">No hay ${state.teamSource === "quali" ? "clasificaciones" : "carreras"}
@@ -1817,7 +1912,7 @@ async function viewEquipos() {
   if (d.summary) {
     $view.appendChild(el(`<div class="card" style="margin-bottom:20px">
       <div class="chart-head" style="padding:0 0 6px"><h2>Resumen ejecutivo · ${state.year}</h2>
-      <span class="sub">tras ${d.n_rounds} rondas · se redacta solo con los datos</span></div>
+      <span class="sub">tras ${d.n_rounds} rondas · se redacta solo con los datos${d._completo ? "" : " · calculado sobre TODO el campo"}</span></div>
       ${d.summary.map((p) => `<div class="chart-summary" style="margin:8px 0 0">${p}</div>`).join("")}
     </div>`));
   }
@@ -2057,6 +2152,7 @@ async function actualizarTodo() {
     else toast(`Actualización lista: ${st.ok} sesión(es) nueva(s) en la base`
                + (st.fail ? ` · ${st.fail} fallaron` : "") + ". Refrescando…");
     state.schedCache = {};
+    state._tcache = {};
     route();
   };
   setTimeout(poll, 1500);
