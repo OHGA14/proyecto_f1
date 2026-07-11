@@ -1480,18 +1480,24 @@ function drawSessionStatsInner(zone, ss, rerender) {
       e.points.filter((p) => p.out).forEach((p) => { outX.push(p.lap); outY.push(p.t); });
       e.points.filter((p) => p.pit).forEach((p) => { pitX.push(p.lap); pitY.push(p.t); pitC.push(e.color); });
     });
-    if (state.evoOut !== false && outX.length)
+    const mostrar = state.evoOut !== false;
+    if (mostrar && outX.length)
       traces.push({ type: "scatter", mode: "markers", name: "Atípicas",
         x: outX, y: outY, marker: { symbol: "x-thin-open", size: 6, color: "#5b616d" },
         hoverinfo: "skip" });
-    if (pitX.length)
+    if (mostrar && pitX.length)
       traces.push({ type: "scatter", mode: "markers", name: "Pit",
         x: pitX, y: pitY, marker: { symbol: "diamond", size: 7, color: pitC,
         line: { color: "#fff", width: 1 } },
         hovertemplate: "PIT · V%{x}<extra></extra>" });
-    const visibles = traces.flatMap((t) => (t.name === "Atípicas" || t.name === "Pit")
-      ? (state.evoOut !== false ? t.y : []) : t.y).filter((v) => v != null);
-    const tt = timeTicks(visibles.length ? visibles : [60, 120]);
+    // el RANGO del eje lo decide el toggle: con atípicas ocultas la escala
+    // es la de las vueltas limpias (antes los pits de 2:20 aplastaban todo)
+    const limpiasY = ss.evo.flatMap((e) => e.points.filter((p) => !p.out).map((p) => p.t));
+    const todasY = ss.evo.flatMap((e) => e.points.map((p) => p.t));
+    const ys = (mostrar ? todasY : limpiasY).filter((v) => v != null);
+    const tt = timeTicks(ys.length ? ys : [60, 120]);
+    const pad = (Math.max(...ys) - Math.min(...ys)) * 0.05 + 0.15;
+    const rangoY = [Math.min(...ys) - pad, Math.max(...ys) + pad];
     const scShapesEvo = (ss.sc_ranges || []).map(([l0, l1]) => ({
       type: "rect", x0: l0 - 0.5, x1: l1 + 0.5, yref: "paper", y0: 0, y1: 1,
       fillcolor: "rgba(255,196,0,.07)", line: { width: 0 }, layer: "below" }));
@@ -1502,7 +1508,7 @@ function drawSessionStatsInner(zone, ss, rerender) {
         font: { size: 9, color: "#FFC400" } })),
       margin: { l: 64, r: 14, t: 30, b: 44 },
       xaxis: { ...baseLayout().xaxis, title: { text: "VUELTA", font: { size: 10 } } },
-      yaxis: { ...baseLayout().yaxis, ...tt },
+      yaxis: { ...baseLayout().yaxis, ...tt, range: rangoY },
       legend: { orientation: "h", y: -0.12, font: { size: 10.5 } },
     }), PLOTLY_CFG);
   }
