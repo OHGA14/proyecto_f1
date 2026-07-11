@@ -48,9 +48,11 @@ def get_session_detail(sid: str = Query(..., description="ID 'año|GP|sesión'")
 
 @app.get("/api/h2h")
 def get_h2h(a: str = Query(..., min_length=2, max_length=4),
-            b: str = Query(..., min_length=2, max_length=4)):
-    """Head-to-head histórico: delta de mejor vuelta por GP entre dos pilotos."""
-    return queries.h2h(a.upper(), b.upper())
+            b: str = Query(..., min_length=2, max_length=4),
+            source: str = "race"):
+    """Head-to-head histórico: deltas por GP (carrera o qualy), duelo de
+    posiciones, sectores y puntos por temporada."""
+    return queries.h2h(a.upper(), b.upper(), source if source in ("race", "quali") else "race")
 
 
 @app.get("/api/drivers")

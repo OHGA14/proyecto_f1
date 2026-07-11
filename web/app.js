@@ -377,22 +377,36 @@ async function viewH2H() {
     [window._h2hA, window._h2hB] = [window._h2hB, window._h2hA]; viewH2H();
   };
 
+  if (!state.h2hSource) state.h2hSource = "race";
+  const srcTg = el(`<div class="pills" style="margin-bottom:18px">
+    <button class="pill ${state.h2hSource === "race" ? "active" : ""}">CARRERA (mejor vuelta)</button>
+    <button class="pill ${state.h2hSource === "quali" ? "active" : ""}">QUALY (a una vuelta)</button></div>`);
+  const [sr, sq] = srcTg.querySelectorAll("button");
+  sr.onclick = () => { state.h2hSource = "race"; viewH2H(); };
+  sq.onclick = () => { state.h2hSource = "quali"; viewH2H(); };
+  $view.appendChild(srcTg);
+
   if (window._h2hA === window._h2hB) {
     $view.appendChild(el(`<div class="empty">Elige dos pilotos distintos.</div>`));
     return;
   }
-  const d = await api(`/h2h?a=${window._h2hA}&b=${window._h2hB}`);
+  const d = await api(`/h2h?a=${window._h2hA}&b=${window._h2hB}&source=${state.h2hSource}`);
   if (!d.deltas.length) {
     $view.appendChild(el(`<div class="empty">${d.summary}</div>`));
     return;
   }
 
-  const mas = d.media < 0 ? d.a : d.b;
+  const mas = d.median < 0 ? d.a : d.b;
+  const enPista = (d.a.ahead + d.b.ahead) ? (d.a.ahead >= d.b.ahead ? d.a : d.b) : null;
   $view.appendChild(el(`<div class="tiles" style="margin-bottom:18px">
     <div class="card tile" style="--tc:${d.a.color}"><div class="label">${d.a.code} más rápido en</div>
       <div class="value">${d.a.wins}</div><div class="hint">de ${d.deltas.length} GPs comunes</div></div>
-    <div class="card tile" style="--tc:${mas.color}"><div class="label">Ventaja media</div>
-      <div class="value">${Math.abs(d.media).toFixed(3)}s</div><div class="hint">a favor de ${mas.code}</div></div>
+    <div class="card tile" style="--tc:${mas.color}"><div class="label">Ventaja mediana</div>
+      <div class="value">${Math.abs(d.median).toFixed(3)}s</div>
+      <div class="hint">a favor de ${mas.code} · media ${Math.abs(d.media).toFixed(3)}s sin atípicas</div></div>
+    ${enPista ? `<div class="card tile" style="--tc:${enPista.color}"><div class="label">En pista, delante</div>
+      <div class="value">${Math.max(d.a.ahead, d.b.ahead)}–${Math.min(d.a.ahead, d.b.ahead)}</div>
+      <div class="hint">${enPista.code} terminó por delante (carreras comunes)</div></div>` : ""}
     <div class="card tile" style="--tc:${d.b.color}"><div class="label">${d.b.code} más rápido en</div>
       <div class="value">${d.b.wins}</div><div class="hint">de ${d.deltas.length} GPs comunes</div></div>
   </div>`));
@@ -410,8 +424,11 @@ async function viewH2H() {
   $view.appendChild(card);
   Plotly.newPlot(plot, [{
     type: "bar", x: d.gps, y: d.deltas,
-    marker: { color: d.deltas.map((v) => (v < 0 ? d.a.color : d.b.color)),
-              line: { color: "#11141b", width: 2 } },
+    marker: { color: d.deltas.map((v, i) => {
+        const c = v < 0 ? d.a.color : d.b.color;
+        return d.outlier && d.outlier[i] ? rgba(c, 0.3) : c;
+      }),
+      line: { color: "#11141b", width: 2 } },
     text: d.deltas.map((v) => `${Math.abs(v).toFixed(2)}`), textposition: "outside",
     textfont: { size: 10, color: "#9aa0aa" },
     hovertemplate: "%{x}<br>Δ = %{y:+.3f}s (A − B)<extra></extra>",
@@ -421,6 +438,49 @@ async function viewH2H() {
     yaxis: { ...baseLayout().yaxis, title: { text: "SEGUNDOS (A − B)", font: { size: 10 } },
              zeroline: true, zerolinecolor: "rgba(255,255,255,.35)", zerolinewidth: 1 },
   }), PLOTLY_CFG);
+
+  // ── DUELO POR SECTORES + PUNTOS POR TEMPORADA ──────────────────────────
+  const rowX = el(`<div class="grid cols-2" style="margin-top:20px"></div>`);
+  $view.appendChild(rowX);
+
+  if (d.sectores && Object.keys(d.sectores).length) {
+    const cSec = chartCard({
+      title: "¿Dónde le gana? · duelo por sectores",
+      sub: `mediana del mejor sector en carreras comunes · abajo = ${d.a.code} más rápido`,
+      tips: [`<b>¿${d.a.code} gana S1 pero pierde S3?</b> → su ventaja vive en esa parte del circuito: frenadas, curvas o tracción según el sector.`,
+             "Si uno gana los 3 sectores, la diferencia es global (coche o momento de forma); si se reparten, es estilo de pilotaje."],
+    });
+    rowX.appendChild(cSec.card);
+    const ks = Object.keys(d.sectores);
+    Plotly.newPlot(cSec.plot, [{
+      type: "bar", x: ks.map((k) => k.toUpperCase()), y: ks.map((k) => d.sectores[k]),
+      marker: { color: ks.map((k) => d.sectores[k] < 0 ? d.a.color : d.b.color),
+                line: { color: "#11141b", width: 2 } },
+      text: ks.map((k) => `${d.sectores[k] < 0 ? d.a.code : d.b.code} +${Math.abs(d.sectores[k]).toFixed(3)}s`),
+      textposition: "outside", textfont: { size: 11, color: "#9aa0aa" },
+      hovertemplate: "%{x} · Δ %{y:+.3f}s (A − B)<extra></extra>",
+    }], baseLayout({
+      height: 340, margin: { l: 56, r: 16, t: 24, b: 40 },
+      yaxis: { ...baseLayout().yaxis, title: { text: "SEGUNDOS (A − B)", font: { size: 10 } },
+               zeroline: true, zerolinecolor: "rgba(255,255,255,.3)" },
+    }), PLOTLY_CFG);
+  }
+
+  if (d.temporadas && d.temporadas.length) {
+    const filas = d.temporadas.map((t) => {
+      const ganaA = t.a > t.b;
+      return `<tr><td class="num"><b>${t.year}</b></td>
+        <td class="num" style="${ganaA ? "font-weight:800" : "color:var(--ink3)"}">${t.a.toFixed(0)}</td>
+        <td class="num" style="${!ganaA ? "font-weight:800" : "color:var(--ink3)"}">${t.b.toFixed(0)}</td>
+        <td>${drvChip(ganaA ? d.a.code : d.b.code, ganaA ? d.a.color : d.b.color)}</td></tr>`;
+    }).join("");
+    rowX.appendChild(el(`<div class="card table-wrap">
+      <div class="chart-head" style="padding:0 0 8px"><h2>Puntos por temporada</h2>
+        <span class="sub">Carrera + Sprint · negrita = quien sumó más ese año</span></div>
+      <table><thead><tr><th class="num">Año</th>
+        <th class="num">${d.a.code}</th><th class="num">${d.b.code}</th><th>Ganó</th></tr></thead>
+      <tbody>${filas}</tbody></table></div>`));
+  }
 }
 
 /* ───────────────────────────── vista ANÁLISIS (telemetría bajo demanda) */

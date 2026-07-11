@@ -403,45 +403,120 @@ def session_detail(sid):
         con.close()
 
 
-def h2h(code_a, code_b):
+def h2h(code_a, code_b, source="race"):
+    """Duelo histórico entre dos pilotos: delta de mejor vuelta por GP común
+    (carrera o qualy), duelo de posiciones, sectores y puntos por temporada."""
+    import numpy as np
     con = _con()
     try:
-        best = db.query(con, """
-            SELECT s.year, s.round, s.gp, l.driver, MIN(l.time_s) AS best_s,
-                   arg_min(l.team, l.time_s) AS team
-            FROM laps l JOIN sessions s USING(session_id)
-            WHERE s.session='Race' AND l.time_s IS NOT NULL AND l.is_accurate
-              AND l.driver IN (?, ?)
-            GROUP BY 1, 2, 3, 4""", [code_a, code_b])
+        # ── mejor vuelta por GP común (carrera o qualy) ────────────────────
+        if source == "quali":
+            raw = db.query(con, """
+                SELECT s.year, s.round, s.gp, r.abbr AS driver,
+                       r.q1_s, r.q2_s, r.q3_s, r.team
+                FROM results r JOIN sessions s USING(session_id)
+                WHERE s.session = 'Qualifying' AND r.abbr IN (?, ?)""",
+                [code_a, code_b])
+            if not raw.empty:
+                raw["best_s"] = raw[["q1_s", "q2_s", "q3_s"]].min(axis=1, skipna=True)
+                raw = raw.dropna(subset=["best_s"])
+            best = raw
+        else:
+            best = db.query(con, """
+                SELECT s.year, s.round, s.gp, l.driver, MIN(l.time_s) AS best_s,
+                       arg_min(l.team, l.time_s) AS team
+                FROM laps l JOIN sessions s USING(session_id)
+                WHERE s.session='Race' AND l.time_s IS NOT NULL AND l.is_accurate
+                  AND l.driver IN (?, ?)
+                GROUP BY 1, 2, 3, 4""", [code_a, code_b])
+        vacio = {"gps": [], "deltas": [], "outlier": [], "summary": "Sin datos comunes.",
+                 "source": source}
         if best.empty:
-            return {"gps": [], "deltas": [], "summary": "Sin datos comunes."}
+            return vacio
         a = best[best["driver"] == code_a]
         b = best[best["driver"] == code_b]
         m = a.merge(b, on=["year", "round", "gp"], suffixes=("_a", "_b"))
         m = m.sort_values(["year", "round"])
         if m.empty:
-            return {"gps": [], "deltas": [], "summary":
-                    f"{code_a} y {code_b} no comparten ningún GP en la base."}
+            vacio["summary"] = f"{code_a} y {code_b} no comparten ningún GP en la base."
+            return vacio
         gps = [f"{r['gp'].replace(' Grand Prix', '')} {str(r['year'])[2:]}"
                for _, r in m.iterrows()]
         deltas = (m["best_s_a"] - m["best_s_b"]).round(3).tolist()
+        outlier = [abs(d) > 2.5 for d in deltas]   # lluvia/incidente: no es ritmo puro
         col_a = team_color(m.iloc[-1]["team_a"]) or "#FF2D2D"
         col_b = team_color(m.iloc[-1]["team_b"]) or "#5B8FD9"
-        if col_a == col_b:  # compañeros de equipo
+        if col_a == col_b:
             col_b = _mix_white(col_b, 0.5)
         wins_a = sum(1 for d in deltas if d < 0)
         n = len(deltas)
-        media = sum(deltas) / n
-        mas = code_a if media < 0 else code_b
-        summary = (f"En {n} GPs comunes: {code_a} fue más rápido en {wins_a}, "
-                   f"{code_b} en {n - wins_a}. Ventaja media de {mas}: "
-                   f"{abs(media):.3f}s por vuelta rápida.")
-        return {"gps": gps, "deltas": deltas,
+        limpios = [d for d, o in zip(deltas, outlier) if not o] or deltas
+        mediana = float(np.median(limpios))
+        media = float(np.mean(limpios))
+        mas = code_a if mediana < 0 else code_b
+
+        # ── duelo de posiciones (carreras comunes) ─────────────────────────
+        posr = db.query(con, """
+            SELECT s.year, s.round, r.abbr, r.position
+            FROM results r JOIN sessions s USING(session_id)
+            WHERE s.session='Race' AND r.position IS NOT NULL
+              AND r.abbr IN (?, ?)""", [code_a, code_b])
+        ahead_a = ahead_b = 0
+        if not posr.empty:
+            piv = posr.pivot_table(index=["year", "round"], columns="abbr",
+                                   values="position", aggfunc="first").dropna()
+            if code_a in piv.columns and code_b in piv.columns:
+                ahead_a = int((piv[code_a] < piv[code_b]).sum())
+                ahead_b = int((piv[code_b] < piv[code_a]).sum())
+
+        # ── duelo por sectores (promedio de mejores sectores, carreras) ────
+        sec = db.query(con, """
+            SELECT s.year, s.round, l.driver,
+                   MIN(l.s1_s) AS s1, MIN(l.s2_s) AS s2, MIN(l.s3_s) AS s3
+            FROM laps l JOIN sessions s USING(session_id)
+            WHERE s.session='Race' AND l.driver IN (?, ?)
+            GROUP BY 1, 2, 3""", [code_a, code_b])
+        sectores = None
+        if not sec.empty:
+            sa = sec[sec["driver"] == code_a]
+            sb = sec[sec["driver"] == code_b]
+            ms = sa.merge(sb, on=["year", "round"], suffixes=("_a", "_b"))
+            if len(ms) >= 2:
+                sectores = {}
+                for k in ("s1", "s2", "s3"):
+                    dif = (ms[f"{k}_a"] - ms[f"{k}_b"]).dropna()
+                    dif = dif[dif.abs() < 2.5]
+                    if len(dif):
+                        sectores[k] = round(float(dif.median()), 3)
+
+        # ── puntos por temporada ───────────────────────────────────────────
+        pts = db.query(con, """
+            SELECT s.year, r.abbr, SUM(COALESCE(r.points, 0)) AS pts
+            FROM results r JOIN sessions s USING(session_id)
+            WHERE s.session IN ('Race','Sprint') AND r.abbr IN (?, ?)
+            GROUP BY 1, 2 ORDER BY 1""", [code_a, code_b])
+        temporadas = []
+        for year, g in pts.groupby("year"):
+            fila = {"year": int(year), "a": 0.0, "b": 0.0}
+            for _, r in g.iterrows():
+                fila["a" if r["abbr"] == code_a else "b"] = float(r["pts"])
+            temporadas.append(fila)
+
+        que = "vuelta rápida de carrera" if source == "race" else "mejor vuelta de qualy"
+        summary = (f"En {n} GPs comunes ({que}): {code_a} más rápido en {wins_a}, "
+                   f"{code_b} en {n - wins_a}. Ventaja MEDIANA de {mas}: "
+                   f"{abs(mediana):.3f}s (media {abs(media):.3f}s, sin atípicas). "
+                   + (f"En pista, {code_a if ahead_a >= ahead_b else code_b} terminó "
+                      f"delante {max(ahead_a, ahead_b)}-{min(ahead_a, ahead_b)}."
+                      if (ahead_a + ahead_b) else ""))
+        return {"gps": gps, "deltas": deltas, "outlier": outlier, "source": source,
                 "a": {"code": code_a, "name": driver_name(code_a), "color": col_a,
-                      "wins": wins_a},
+                      "wins": wins_a, "ahead": ahead_a},
                 "b": {"code": code_b, "name": driver_name(code_b), "color": col_b,
-                      "wins": n - wins_a},
-                "media": round(media, 3), "summary": summary}
+                      "wins": n - wins_a, "ahead": ahead_b},
+                "median": round(mediana, 3), "media": round(media, 3),
+                "sectores": sectores, "temporadas": temporadas,
+                "summary": summary}
     finally:
         con.close()
 
