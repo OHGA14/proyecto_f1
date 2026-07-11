@@ -133,6 +133,16 @@ def get_tel_vslaps(sid: str, driver: str, lap_a: int, lap_b: int):
     return out
 
 
+@app.get("/api/teams/{year}")
+def get_teams(year: int, source: str = "quali"):
+    """Evolución de equipos: déficit % al pole por ronda, pendientes de
+    desarrollo, convergencia, huella de circuito y proyección.
+    `source` = quali (Q1-Q3) o race (mejor vuelta de carrera)."""
+    if source not in ("quali", "race"):
+        raise HTTPException(422, "source debe ser 'quali' o 'race'")
+    return queries.team_evolution(year, source)
+
+
 @app.get("/api/historic/pace/{year}")
 def get_historic_pace(year: int):
     """Ritmo puro por GP de la temporada: % sobre la mejor vuelta de cada carrera."""

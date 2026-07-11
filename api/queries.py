@@ -485,3 +485,138 @@ def trap_records(year):
                 for _, r in vmax.iterrows()]
     finally:
         con.close()
+
+
+def team_evolution(year, source="quali"):
+    """Evolución de equipos: déficit % al pole (y a la mediana) por ronda,
+    pendientes de desarrollo con R², convergencia de la parrilla, huella de
+    circuito y proyección ingenua. `source` = 'quali' (Q1-Q3) o 'race'
+    (mejor vuelta de carrera, cobertura completa)."""
+    import numpy as np
+    con = _con()
+    try:
+        if source == "race":
+            base = db.query(con, """
+                SELECT s.round, s.gp, l.team, MIN(l.time_s) AS best_s
+                FROM laps l JOIN sessions s USING(session_id)
+                WHERE s.year = ? AND s.session = 'Race'
+                  AND l.time_s IS NOT NULL AND l.is_accurate
+                  AND l.team IS NOT NULL AND l.team != 'None'
+                GROUP BY 1, 2, 3""", [year])
+        else:
+            raw = db.query(con, """
+                SELECT s.round, s.gp, r.team, r.q1_s, r.q2_s, r.q3_s
+                FROM results r JOIN sessions s USING(session_id)
+                WHERE s.year = ? AND s.session = 'Qualifying'""", [year])
+            if not raw.empty:
+                # mejor tiempo del piloto = mínimo entre Q1/Q2/Q3 (ignora nulos)
+                raw["best_s"] = raw[["q1_s", "q2_s", "q3_s"]].min(axis=1, skipna=True)
+                raw = raw.dropna(subset=["best_s"])
+                base = (raw.groupby(["round", "gp", "team"], as_index=False)
+                           .agg(best_s=("best_s", "min")))
+            else:
+                base = raw
+        if base.empty:
+            return {"rounds": [], "teams": [], "summary": None, "source": source}
+
+        # déficit % al pole y a la mediana DEL CAMPO DE EQUIPOS, por ronda
+        base = base.sort_values("round").reset_index(drop=True)
+        base["pole"] = base.groupby("round")["best_s"].transform("min")
+        base["mediana"] = base.groupby("round")["best_s"].transform("median")
+        base["deficit"] = ((base["best_s"] - base["pole"]) / base["pole"] * 100).round(3)
+        base["deficit_med"] = ((base["best_s"] - base["mediana"]) / base["mediana"] * 100).round(3)
+
+        rondas = base[["round", "gp"]].drop_duplicates().sort_values("round")
+        labels = [g.replace(" Grand Prix", "") for g in rondas["gp"]]
+        rlist = rondas["round"].tolist()
+
+        # orden de equipos por déficit promedio (los rápidos primero)
+        orden = base.groupby("team")["deficit"].mean().sort_values().index.tolist()
+        colores = {t: (team_color(t) or "#9aa0aa") for t in orden}
+
+        teams = []
+        for t in orden:
+            sub = base[base["team"] == t].set_index("round")
+            serie = [round(float(sub.loc[r, "deficit"]), 3) if r in sub.index else None
+                     for r in rlist]
+            serie_med = [round(float(sub.loc[r, "deficit_med"]), 3) if r in sub.index else None
+                         for r in rlist]
+            item = {"team": t, "color": colores[t], "deficit": serie,
+                    "deficit_med": serie_med,
+                    "media": round(float(sub["deficit"].mean()), 3),
+                    "rounds": int(sub.index.nunique())}
+            # pendiente de desarrollo + R² (mínimo 3 rondas)
+            if sub.index.nunique() >= 3:
+                x = sub.index.values.astype(float)
+                y = sub["deficit"].values.astype(float)
+                b1, b0 = np.polyfit(x, y, 1)
+                y_hat = b0 + b1 * x
+                ss_res = float(((y - y_hat) ** 2).sum())
+                ss_tot = float(((y - y.mean()) ** 2).sum())
+                r2 = max(0.0, 1 - ss_res / ss_tot) if ss_tot > 0 else 0.0
+                item.update(slope=round(float(b1), 4), r2=round(r2, 3),
+                            proy=round(max(0.0, float(b0 + b1 * (max(rlist) + 1))), 3))
+            teams.append(item)
+
+        # convergencia: σ (muestral) del déficit por ronda + tendencia lineal
+        disp = base.groupby("round")["deficit"].std().dropna()
+        conv = None
+        if len(disp) >= 3:
+            b1s, b0s = np.polyfit(disp.index.values.astype(float), disp.values, 1)
+            conv = {"rounds": disp.index.astype(int).tolist(),
+                    "sigma": [round(float(v), 3) for v in disp.values],
+                    "trend": [round(float(b0s + b1s * r), 3) for r in disp.index],
+                    "slope": round(float(b1s), 4)}
+
+        # huella de circuito: residuo vs el promedio PROPIO del equipo
+        pivote = base.pivot_table(index="team", columns="round", values="deficit")
+        residuos = pivote.sub(pivote.mean(axis=1), axis=0).reindex(orden)
+        huella = {"teams": orden,
+                  "labels": [f"R{r} {labels[rlist.index(r)]}" for r in pivote.columns],
+                  "z": [[round(float(v), 2) if v == v else None for v in fila]
+                        for fila in residuos.values]}
+        # la huella más marcada (mejor pista relativa de algún equipo)
+        mejor_celda = None
+        arr = residuos.values
+        if arr.size:
+            with np.errstate(invalid="ignore"):
+                idx = np.unravel_index(np.nanargmin(arr), arr.shape)
+            mejor_celda = {"team": orden[idx[0]],
+                           "gp": huella["labels"][idx[1]],
+                           "val": round(float(arr[idx]), 2)}
+
+        # resumen ejecutivo calculado
+        con_pend = [t for t in teams if "slope" in t]
+        resumen = None
+        if len(teams) >= 2:
+            lider, seg = teams[0], teams[1]
+            partes = [f"RITMO: {lider['team']} manda con {lider['media']:.2f}% de "
+                      f"déficit promedio; {seg['team']} lo persigue ({seg['media']:.2f}%)."]
+            if con_pend:
+                mejor = min(con_pend, key=lambda t: t["slope"])
+                peor = max(con_pend, key=lambda t: t["slope"])
+                def cred(r2):
+                    return "tendencia sólida" if r2 >= 0.5 else "tendencia aún ruidosa"
+                partes.append(f"DESARROLLO: {mejor['team']} es quien más recorta "
+                              f"({mejor['slope']:+.3f} %/carrera, R² {mejor['r2']:.2f} → {cred(mejor['r2'])}); "
+                              f"{peor['team']} se rezaga ({peor['slope']:+.3f} %/carrera, "
+                              f"R² {peor['r2']:.2f} → {cred(peor['r2'])}).")
+            if conv:
+                partes.append("CONVERGENCIA: la parrilla se está "
+                              + ("APRETANDO" if conv["slope"] < 0 else "ABRIENDO")
+                              + f" ({conv['slope']:+.3f} puntos de σ por carrera).")
+            if mejor_celda:
+                partes.append(f"HUELLA DE CIRCUITO: la más marcada es {mejor_celda['team']} "
+                              f"en {mejor_celda['gp']} ({mejor_celda['val']:+.2f}% vs su promedio).")
+            proys = sorted((t for t in con_pend if "proy" in t), key=lambda t: t["proy"])[:3]
+            if proys:
+                partes.append("PROYECCIÓN R" + str(max(rlist) + 1) + " (ingenua): "
+                              + " · ".join(f"{t['team']} {t['proy']:.2f}%" for t in proys) + ".")
+            resumen = partes
+
+        return {"source": source, "rounds": rlist, "labels": labels,
+                "n_rounds": len(rlist), "teams": teams, "conv": conv,
+                "huella": huella, "next_round": max(rlist) + 1,
+                "summary": resumen}
+    finally:
+        con.close()
