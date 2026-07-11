@@ -398,3 +398,94 @@ code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .92em;
   .view { width: calc(100% - 24px); margin: 16px auto; }
   .wordmark h1 { font-size: 24px; }
 }
+
+
+/* ═══════════════════════ MOTION · lenguaje "mission control" ═══════════════ */
+
+::selection { background: rgba(var(--red-rgb), .35); }
+
+* { scrollbar-width: thin; scrollbar-color: #26303d transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #222c38; border-radius: 8px; border: 2px solid var(--bg); }
+::-webkit-scrollbar-thumb:hover { background: rgba(var(--red-rgb), .55); }
+
+/* rejilla HUD de fondo (solo tema spacex), desvanecida hacia abajo */
+html[data-theme="spacex"] body::before {
+  content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  background-image:
+    linear-gradient(rgba(140, 180, 220, .05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(140, 180, 220, .05) 1px, transparent 1px);
+  background-size: 44px 44px;
+  -webkit-mask-image: radial-gradient(1100px 560px at 50% 0%, #000 25%, transparent 78%);
+          mask-image: radial-gradient(1100px 560px at 50% 0%, #000 25%, transparent 78%);
+}
+.topbar, .view, .footer { position: relative; z-index: 1; }
+
+/* barra superior: sombra al hacer scroll + línea de barrido */
+.topbar { transition: box-shadow .3s ease; }
+.topbar.scrolled { box-shadow: 0 10px 34px rgba(0, 0, 0, .55); }
+html[data-theme="spacex"] .topbar::after {
+  content: ""; position: absolute; left: 0; bottom: -1px; height: 2px; width: 170px;
+  background: linear-gradient(90deg, transparent, rgba(var(--red-rgb), .8), transparent);
+  animation: sweepline 9s cubic-bezier(.45, 0, .2, 1) infinite; opacity: .55;
+}
+@keyframes sweepline {
+  0% { transform: translateX(-190px); }
+  60%, 100% { transform: translateX(calc(100vw + 60px)); }
+}
+
+/* punto LIVE con anillo de radar */
+.dot { position: relative; }
+.dot::after {
+  content: ""; position: absolute; inset: -3px; border-radius: 50%;
+  border: 1px solid rgba(var(--red-rgb), .7);
+  animation: ping 2.4s cubic-bezier(0, .6, .4, 1) infinite;
+}
+@keyframes ping {
+  0% { transform: scale(.55); opacity: .9; }
+  75%, 100% { transform: scale(2.6); opacity: 0; }
+}
+
+/* revelado escalonado al entrar en pantalla */
+.reveal { opacity: 0; transform: translateY(16px); }
+.reveal.in {
+  opacity: 1; transform: none;
+  transition: opacity .55s cubic-bezier(.2, .7, .3, 1) var(--d, 0ms),
+              transform .55s cubic-bezier(.2, .7, .3, 1) var(--d, 0ms);
+}
+
+/* elevación en tarjetas de gráfica */
+.chart-card { transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease; }
+.chart-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(var(--red-rgb), .3);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, .45);
+}
+
+/* skeleton con línea de escaneo */
+.skeleton-block { position: relative; overflow: hidden; }
+.skeleton-block::after {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(var(--red-rgb), .09), transparent);
+  animation: scanline 1.4s linear infinite;
+}
+@keyframes scanline { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+
+/* botón principal: latido sutil + presión táctil */
+.btn-red { animation: latido 3.4s ease-in-out infinite; }
+@keyframes latido {
+  0%, 100% { box-shadow: 0 4px 14px var(--btn-shadow); }
+  50% { box-shadow: 0 4px 22px var(--btn-shadow), 0 0 0 5px rgba(var(--red-rgb), .06); }
+}
+.btn-red:active, .pill:active, .drv-chip:active, .nav a:active { transform: scale(.965); }
+
+/* toast: salida animada */
+.toast.out { animation: toastout .3s ease both; }
+@keyframes toastout { to { opacity: 0; transform: translate(-50%, 14px); } }
+
+/* accesibilidad: quien pide menos movimiento, lo recibe */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+  .reveal { opacity: 1; transform: none; }
+}

@@ -2134,7 +2134,89 @@ function toast(msg, ms = 6000) {
   document.querySelectorAll(".toast").forEach((t) => t.remove());
   const t = el(`<div class="toast">${msg}</div>`);
   document.body.appendChild(t);
-  setTimeout(() => t.remove(), ms);
+  setTimeout(() => { t.classList.add("out"); setTimeout(() => t.remove(), 320); }, ms);
+}
+
+/* ── motion: revelado escalonado + contadores de misión ─────────────────────
+   Sin IntersectionObserver (no dispara en algunos contextos embebidos):
+   un ticker con rAF compara scroll y revela lo que entra en pantalla. */
+const REDUCED = matchMedia("(prefers-reduced-motion: reduce)").matches;
+let _revN = 0, _revT = 0, _pendientes = 0;
+
+function contarTiles(cont) {
+  cont.querySelectorAll(".value").forEach((v) => {
+    const txt = v.textContent.trim();
+    const m = txt.match(/^(\d[\d.,]*)/);
+    if (!m) return;
+    const sufijo = txt.slice(m[1].length);
+    if (sufijo.startsWith(":")) return;              // tiempos 1:34.058: no contar
+    const fin = parseFloat(m[1].replace(/,/g, ""));
+    if (!isFinite(fin) || fin === 0) return;
+    const dec = (m[1].split(".")[1] || "").length;
+    const t0 = performance.now(), dur = 700;
+    const paso = (t) => {
+      const p = Math.min(1, (t - t0) / dur);
+      const e = 1 - Math.pow(1 - p, 3);
+      v.textContent = (fin * e).toFixed(dec) + sufijo;
+      if (p < 1) requestAnimationFrame(paso);
+    };
+    requestAnimationFrame(paso);
+  });
+}
+
+function chequeaReveals() {
+  if (!_pendientes) return;
+  // algunos contextos embebidos reportan innerHeight 0 → triple respaldo
+  const vh = Math.max(window.innerHeight || 0,
+                      document.documentElement.clientHeight || 0, 500);
+  const ahora = performance.now();
+  document.querySelectorAll(".reveal:not(.in)").forEach((el2) => {
+    const r = el2.getBoundingClientRect();
+    const forzar = ahora - (+el2.dataset.rev || 0) > 4000;   // garantía absoluta
+    if (forzar || (r.top < vh * 0.94 && r.bottom > -40)) {
+      el2.classList.add("in");
+      _pendientes--;
+      if (el2.matches(".tiles")) contarTiles(el2);
+    }
+  });
+}
+
+const REVEAL_SEL = ".card, .section-title, .podium-hero, .race-grid, .tiles, .pills";
+function armaReveal(node) {
+  if (node.nodeType !== 1 || !node.matches(REVEAL_SEL)) return;
+  const padre = node.closest(".card");
+  if (padre && padre !== node) return;               // solo el nivel superior
+  const ahora = performance.now();
+  if (ahora - _revT > 700) _revN = 0;                // nueva tanda → reinicia cascada
+  _revT = ahora;
+  node.classList.add("reveal");
+  node.dataset.rev = performance.now();
+  node.style.setProperty("--d", `${Math.min(_revN++ * 55, 385)}ms`);
+  _pendientes++;
+}
+if (!REDUCED) {
+  let _chequeoProgramado = false;
+  new MutationObserver((muts) => {
+    muts.forEach((m) => m.addedNodes.forEach(armaReveal));
+    if (!_chequeoProgramado) {
+      _chequeoProgramado = true;
+      setTimeout(() => { _chequeoProgramado = false; chequeaReveals(); }, 60);
+    }
+  }).observe($view, { childList: true, subtree: true });
+
+  const alScroll = () => {
+    document.querySelector(".topbar")?.classList.toggle("scrolled", window.scrollY > 10);
+    chequeaReveals();
+  };
+  window.addEventListener("scroll", alScroll, { passive: true });
+  window.addEventListener("resize", chequeaReveals, { passive: true });
+  setInterval(chequeaReveals, 1200);   // corre incluso con la pestaña oculta
+  // respaldo por rAF para contextos donde el evento scroll sea irregular
+  let _lastY = -1;
+  (function tick() {
+    if (window.scrollY !== _lastY) { _lastY = window.scrollY; alScroll(); }
+    requestAnimationFrame(tick);
+  })();
 }
 
 async function actualizarTodo() {
