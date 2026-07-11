@@ -29,10 +29,13 @@ const PLOTLY_CFG = {
   doubleClick: "reset",
 };
 
+const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const accLine = (a = 0.5) => `rgba(${cssVar("--red-rgb") || "255,45,45"},${a})`;
+
 const baseLayout = (extra = {}) => ({
   paper_bgcolor: "rgba(0,0,0,0)",
   plot_bgcolor: "rgba(0,0,0,0)",
-  font: { family: "Inter, sans-serif", color: "#c8cdd6", size: 12 },
+  font: { family: cssVar("--font-chart") || "Inter, sans-serif", color: "#c8cdd6", size: 12 },
   margin: { l: 58, r: 70, t: 16, b: 44 },
   xaxis: { showgrid: false, zeroline: false, color: "#9aa0aa" },
   yaxis: { gridcolor: "rgba(255,255,255,.06)", griddash: "dot", zeroline: false, color: "#9aa0aa" },
@@ -166,7 +169,7 @@ async function viewTemporada() {
       margin: { l: 58, r: 16, t: 14, b: 60 },
       xaxis: { ...baseLayout().xaxis, tickangle: -35, tickfont: { size: 10 } },
       yaxis: { ...baseLayout().yaxis, title: { text: "% SOBRE LA MEJOR", font: { size: 10 } },
-               ticksuffix: "%", zeroline: true, zerolinecolor: "rgba(255,45,45,.5)" },
+               ticksuffix: "%", zeroline: true, zerolinecolor: accLine(0.5) },
       legend: { orientation: "h", y: -0.22, font: { size: 10.5 } },
     }), PLOTLY_CFG);
   }
@@ -860,7 +863,7 @@ function drawTelCharts(zone, d) {
       margin: { l: 56, r: 14, t: 30, b: 48 },
       xaxis: { ...baseLayout().xaxis, ...cornerAxis },
       yaxis: { ...baseLayout().yaxis, title: { text: `SEGUNDOS VS ${d.ref}`, font: { size: 10 } },
-               zeroline: true, zerolinecolor: "rgba(255,45,45,.5)", zerolinewidth: 1.5 },
+               zeroline: true, zerolinecolor: accLine(0.5), zerolinewidth: 1.5 },
       legend: { orientation: "h", y: 1.1, x: 1, xanchor: "right" },
     }), PLOTLY_CFG);
     zone.appendChild(el(`<div style="height:18px"></div>`));
@@ -2161,6 +2164,16 @@ async function actualizarTodo() {
 (async function init() {
   const bu = document.getElementById("btnUpdate");
   if (bu) bu.onclick = (e) => { e.preventDefault(); actualizarTodo(); };
+  const bt = document.getElementById("btnTheme");
+  if (bt) bt.onclick = (e) => {
+    e.preventDefault();
+    const nuevo = (document.documentElement.dataset.theme === "spacex") ? "habib" : "spacex";
+    document.documentElement.dataset.theme = nuevo;
+    localStorage.setItem("tema", nuevo);
+    toast(nuevo === "spacex" ? "Tema SPACEX: negro misión + azul hielo."
+                             : "Tema HABIB: broadcast clásico rojo.");
+    route();
+  };
   try {
     const meta = await api("/meta");
     state.seasons = meta.seasons;

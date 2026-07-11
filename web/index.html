@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>HABIB CONTROL · F1 Data Center</title>
+<script>document.documentElement.dataset.theme = localStorage.getItem("tema") || "spacex";</script>
 <link rel="stylesheet" href="styles.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='50' height='50' fill='white'/><rect x='50' y='50' width='50' height='50' fill='white'/><rect x='50' width='50' height='50' fill='black'/><rect y='50' width='50' height='50' fill='black'/></svg>">
 <script src="vendor/plotly.min.js"></script>
@@ -27,6 +28,7 @@
     <a href="#/h2h"      data-view="h2h">HEAD-TO-HEAD</a>
     <a href="http://localhost:8511" target="_blank" rel="noopener" class="lab"
        title="Dashboard completo: telemetría, delta, fuerzas G, replay…">TELEMETRÍA · LAB ↗</a>
+    <a href="#" id="btnTheme" title="Cambiar tema visual (SpaceX / Habib)">◐ TEMA</a>
     <a href="#" id="btnUpdate" class="upd"
        title="Baja e ingesta las sesiones nuevas de la temporada (Carrera, Qualy, Sprint)">⟳ ACTUALIZAR</a>
   </nav>

@@ -11,7 +11,45 @@
   --ink2: #9aa0aa;
   --ink3: #6b7280;
   --red: #ff2d2d;
+  --red-rgb: 255, 45, 45;
   --radius: 14px;
+  --brand-grad: linear-gradient(93deg, #ff2d2d 0%, #ff7a00 52%, #ffc400 100%);
+  --btn-grad: linear-gradient(180deg, #ff3d3d, #d61f1f);
+  --btn-shadow: rgba(255, 45, 45, .25);
+  --font-ui: "Inter", -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-display: "Arial Narrow", "Inter", sans-serif;
+  --font-chart: Inter, sans-serif;
+  --glow-a: rgba(255, 45, 45, .07);
+  --glow-b: rgba(63, 123, 240, .05);
+}
+
+/* ── TEMA SPACEX: negro misión, azul hielo, tipografía D-DIN ── */
+html[data-theme="spacex"] {
+  --bg: #030507;
+  --card: #090d13;
+  --card2: #0c1219;
+  --border: #16202c;
+  --ink: #e8f2fc;
+  --ink2: #8fa8c0;
+  --ink3: #587085;
+  --red: #38bdf8;
+  --red-rgb: 56, 189, 248;
+  --radius: 8px;
+  --brand-grad: linear-gradient(93deg, #7dd3fc 0%, #e0f2fe 60%, #ffffff 100%);
+  --btn-grad: linear-gradient(180deg, #38bdf8, #0284c7);
+  --btn-shadow: rgba(56, 189, 248, .3);
+  --font-ui: "D-DIN", "DIN Alternate", "Bahnschrift", "Inter", sans-serif;
+  --font-display: "DIN Condensed", "D-DIN Condensed", "Arial Narrow", sans-serif;
+  --font-chart: "D-DIN", "DIN Alternate", "Bahnschrift", Inter, sans-serif;
+  --glow-a: rgba(56, 189, 248, .06);
+  --glow-b: rgba(125, 211, 252, .03);
+}
+html[data-theme="spacex"] .topbar { border-bottom: 1px solid #123047; }
+html[data-theme="spacex"] .wordmark h1 { letter-spacing: 2.5px; font-weight: 700; }
+html[data-theme="spacex"] .section-title { letter-spacing: 2.4px; }
+html[data-theme="spacex"] .flag {
+  background: conic-gradient(#dbeafe 0 25%, #0a0f16 0 50%, #dbeafe 0 75%, #0a0f16 0) 0 0 / 50% 50%;
+  background-size: 16px 16px;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -20,11 +58,11 @@ html { color-scheme: dark; }
 
 body {
   background:
-    radial-gradient(1100px 500px at 85% -10%, rgba(255, 45, 45, .07), transparent 60%),
-    radial-gradient(900px 420px at -10% 0%, rgba(63, 123, 240, .05), transparent 55%),
+    radial-gradient(1100px 500px at 85% -10%, var(--glow-a), transparent 60%),
+    radial-gradient(900px 420px at -10% 0%, var(--glow-b), transparent 55%),
     var(--bg);
   color: var(--ink);
-  font-family: "Inter", -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-family: var(--font-ui);
   min-height: 100vh;
   display: flex;
   flex-direction: column;
@@ -63,18 +101,18 @@ body {
 @keyframes pulse { 0%,100% { opacity: 1; transform: scale(1);} 50% { opacity: .3; transform: scale(.8);} }
 .dot {
   width: 7px; height: 7px; border-radius: 50%; background: var(--red);
-  box-shadow: 0 0 9px 1px rgba(255, 45, 45, .85);
+  box-shadow: 0 0 9px 1px rgba(var(--red-rgb), .85);
   animation: pulse 1.4s ease-in-out infinite;
 }
 
 .wordmark h1 {
-  font-family: "Arial Narrow", "Inter", sans-serif;
+  font-family: var(--font-display);
   font-size: 30px; font-weight: 800; line-height: 1; letter-spacing: .4px;
   margin: 3px 0 2px;
 }
 .wordmark .a { color: var(--ink); }
 .wordmark .b {
-  background: linear-gradient(93deg, #ff2d2d 0%, #ff7a00 52%, #ffc400 100%);
+  background: var(--brand-grad);
   -webkit-background-clip: text; background-clip: text; color: transparent;
 }
 .wordmark .sub { font-size: 9px; letter-spacing: 3px; color: var(--ink3); font-weight: 600; }
@@ -94,8 +132,8 @@ body {
 .nav a:hover { color: #fff; background: rgba(255, 255, 255, .06); }
 .nav a.active {
   color: #fff;
-  background: linear-gradient(180deg, rgba(255, 45, 45, .22), rgba(255, 45, 45, .12));
-  box-shadow: inset 0 0 0 1px rgba(255, 60, 60, .5), 0 2px 10px rgba(255, 45, 45, .12);
+  background: linear-gradient(180deg, rgba(var(--red-rgb), .22), rgba(var(--red-rgb), .12));
+  box-shadow: inset 0 0 0 1px rgba(var(--red-rgb), .5), 0 2px 10px rgba(var(--red-rgb), .12);
 }
 .nav a.lab {
   color: #8fa3c4;
@@ -166,8 +204,8 @@ body {
 }
 .pill:hover { color: #fff; border-color: #3a3d47; }
 .pill.active {
-  color: #fff; border-color: rgba(255, 60, 60, .55);
-  background: linear-gradient(180deg, rgba(255, 45, 45, .2), rgba(255, 45, 45, .1));
+  color: #fff; border-color: rgba(var(--red-rgb), .55);
+  background: linear-gradient(180deg, rgba(var(--red-rgb), .2), rgba(var(--red-rgb), .1));
 }
 
 /* tarjetas de GP */
@@ -262,7 +300,7 @@ select {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%239aa0aa' stroke-width='1.6' fill='none'/%3E%3C/svg%3E");
   background-repeat: no-repeat; background-position: right 14px center;
 }
-select:focus { outline: none; border-color: rgba(255, 60, 60, .55); }
+select:focus { outline: none; border-color: rgba(var(--red-rgb), .55); }
 .vs { font-size: 13px; font-weight: 800; color: var(--red); letter-spacing: 1px; }
 .swap {
   border: 1px solid var(--border); background: var(--card2); color: var(--ink2);
@@ -326,11 +364,11 @@ select:focus { outline: none; border-color: rgba(255, 60, 60, .55); }
 .btn-red {
   border: none; cursor: pointer; font: inherit; font-weight: 800;
   color: #fff; padding: 10px 22px; border-radius: 10px; letter-spacing: .6px;
-  background: linear-gradient(180deg, #ff3d3d, #d61f1f);
-  box-shadow: 0 4px 14px rgba(255, 45, 45, .25);
+  background: var(--btn-grad);
+  box-shadow: 0 4px 14px var(--btn-shadow);
   transition: transform .12s, box-shadow .12s;
 }
-.btn-red:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(255, 45, 45, .35); }
+.btn-red:hover { transform: translateY(-1px); box-shadow: 0 6px 18px var(--btn-shadow); }
 .btn-red:disabled { opacity: .45; cursor: default; transform: none; }
 
 /* ─────────────────────────────────────── skeleton + footer */
