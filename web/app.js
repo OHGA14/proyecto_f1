@@ -808,25 +808,64 @@ function drawTelCharts(zone, d) {
   }), PLOTLY_CFG);
 
   const cGG = chartCard({
-    title: "G-G · envolvente de agarre", sub: "cada punto = una muestra de la vuelta",
-    tips: ["<b>¿Nube ancha a los lados?</b> → mucho paso por curva (G lateral).",
-           "<b>¿Puntos muy abajo?</b> → frenadas fuertes (G longitudinal negativa).",
-           "El borde de la nube es el límite de agarre que ese coche alcanzó."],
+    title: "G-G · envolvente de agarre",
+    sub: "la línea gruesa es el LÍMITE que cada coche alcanzó (percentil 95)",
+    summary: d.summaries.gg || "",
+    tips: ["<b>¿Una envolvente más ancha a los lados?</b> → ese coche genera más agarre lateral: más carga aerodinámica o mejor goma.",
+           "<b>¿Más profunda abajo?</b> → frena más fuerte y tarde; abajo es FRENADA, arriba TRACCIÓN.",
+           "<b>¿Envolvente 'cuadrada' en las esquinas?</b> → combina frenada y giro a la vez (trail braking): pilotaje al límite.",
+           "Los círculos punteados son referencias de 1G a 5G; los puntos, todas las muestras de la vuelta."],
   });
   row1.appendChild(cGG.card);
-  Plotly.newPlot(cGG.plot, d.drivers.map((x) => ({
-    type: "scatter", mode: "markers", name: x.code, x: x.glat, y: x.glong,
-    marker: { color: x.color, size: 3.5, opacity: 0.45 },
-    hovertemplate: `<b>${x.code}</b><br>G lat: %{x:.2f} · G long: %{y:.2f}<extra></extra>`,
-  })), baseLayout({
-    height: 560, margin: { l: 52, r: 14, t: 12, b: 46 },
-    xaxis: { ...baseLayout().xaxis, title: { text: "G LATERAL", font: { size: 10 } },
-             showgrid: true, gridcolor: "rgba(255,255,255,.06)", griddash: "dot" },
-    yaxis: { ...baseLayout().yaxis, title: { text: "G LONGITUDINAL", font: { size: 10 } } },
-    legend: { orientation: "h", y: -0.14, x: 0.5, xanchor: "center" },
-  }), PLOTLY_CFG);
+  {
+    const maxAbs = Math.max(2.5, ...d.drivers.flatMap((x) =>
+      [...(x.env_x || []), ...(x.env_y || [])].map(Math.abs))) * 1.18;
+    const circulos = [];
+    for (let g = 1; g <= Math.floor(maxAbs); g++)
+      circulos.push({ type: "circle", x0: -g, x1: g, y0: -g, y1: g,
+        line: { color: "rgba(255,255,255,.09)", width: 1, dash: "dot" } });
+    const trazas = [];
+    d.drivers.forEach((x) => {
+      trazas.push({ type: "scatter", mode: "markers", name: x.code, legendgroup: x.code,
+        x: x.glat, y: x.glong, showlegend: false,
+        marker: { color: rgba(x.color, 0.22), size: 3 }, hoverinfo: "skip" });
+    });
+    d.drivers.forEach((x) => {
+      if (!x.env_x) return;
+      trazas.push({ type: "scatter", mode: "lines", name: x.code, legendgroup: x.code,
+        x: x.env_x, y: x.env_y,
+        line: { color: x.color, width: 3, shape: "spline", smoothing: 0.8 },
+        fill: "toself", fillcolor: rgba(x.color, 0.05),
+        hovertemplate: `<b>${x.code}</b> · envolvente<br>lat %{x:.2f}G · long %{y:.2f}G<extra></extra>` });
+    });
+    Plotly.newPlot(cGG.plot, trazas, baseLayout({
+      height: 560, margin: { l: 52, r: 14, t: 12, b: 46 },
+      shapes: circulos,
+      annotations: [
+        { x: 0, y: -maxAbs * 0.93, text: "FRENADA", showarrow: false,
+          font: { size: 9.5, color: "#5d7288", family: "Inter" } },
+        { x: 0, y: maxAbs * 0.93, text: "TRACCIÓN", showarrow: false,
+          font: { size: 9.5, color: "#5d7288" } },
+        { x: -maxAbs * 0.9, y: 0, text: "CURVA DER.", textangle: -90, showarrow: false,
+          font: { size: 9.5, color: "#5d7288" } },
+        { x: maxAbs * 0.9, y: 0, text: "CURVA IZQ.", textangle: 90, showarrow: false,
+          font: { size: 9.5, color: "#5d7288" } },
+        ...circulos.map((c, i) => ({ x: 0.1, y: (i + 1), text: `${i + 1}G`,
+          showarrow: false, xanchor: "left",
+          font: { size: 8.5, color: "rgba(255,255,255,.28)" } })),
+      ],
+      xaxis: { ...baseLayout().xaxis, range: [-maxAbs, maxAbs], zeroline: true,
+               zerolinecolor: "rgba(255,255,255,.14)", showgrid: false,
+               title: { text: "G LATERAL", font: { size: 10 } } },
+      yaxis: { ...baseLayout().yaxis, range: [-maxAbs, maxAbs], zeroline: true,
+               zerolinecolor: "rgba(255,255,255,.14)", showgrid: false,
+               scaleanchor: "x", scaleratio: 1,
+               title: { text: "G LONGITUDINAL", font: { size: 10 } } },
+      legend: { orientation: "h", y: -0.12, x: 0.5, xanchor: "center" },
+    }), PLOTLY_CFG);
+  }
 
-  if (d.micro) {
+    if (d.micro) {
     const m = d.micro;
     const colorDe = (k) => (d.drivers.find((x) => x.code === k) || {}).color || "#ddd";
     const lbls = `<div class="ms-col-lbl"><div class="ms-head">&nbsp;</div>${m.keys.map((k) =>

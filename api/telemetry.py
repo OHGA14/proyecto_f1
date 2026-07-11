@@ -15,7 +15,7 @@ import numpy as np
 import fastf1 as ff1
 
 from f1core.laps import get_selected_lap
-from f1core.physics import compute_gg_from_telemetry, _dtw_distance
+from f1core.physics import compute_gg_from_telemetry, build_gg_envelope, _dtw_distance
 from f1core.timeutils import _get_sector_cut_distances
 from api.queries import driver_colors, driver_name, fmt_lap, COMPOUND_DISPLAY
 
@@ -330,6 +330,14 @@ def _assemble(s, entries):
         }
         f, fr, cu = _phase_pcts(ch["throttle"], ch["brake"], ch["dt"])
         item["phases"] = {"fondo": f, "frenada": fr, "curva": cu}
+        # envolvente de agarre (percentil 95 por ángulo) + máximos
+        env = build_gg_envelope(np.asarray(ch["glat"], dtype=float),
+                                np.asarray(ch["glong"], dtype=float))
+        if env is not None:
+            item["env_x"] = [round(float(v), 3) for v in env[0]]
+            item["env_y"] = [round(float(v), 3) for v in env[1]]
+        item["g_lat_max"] = round(float(np.percentile(np.abs(ch["glat"]), 99.5)), 2)
+        item["g_brake_max"] = round(float(-np.percentile(-np.asarray(ch["glong"]), 99.5)), 2)
         if e is not ref:
             dx, dv = _delta_series(ch_ref["d"], ch_ref["t"], ch["d"], ch["t"])
             item["delta_d"] = _downsample(dx, step, 1)
@@ -489,6 +497,9 @@ def _assemble(s, entries):
                         f"{_N_MINISECTORS} mini-sectores del trazado.")
     fondos = " · ".join(f"{d['code']} {d['phases']['fondo']:.0f}%" for d in drivers)
     summaries["phases"] = f"% de la vuelta a fondo: {fondos}."
+    summaries["gg"] = ("Límites de la vuelta: " + " · ".join(
+        f"{d['code']} apoya {d['g_lat_max']:.1f}G laterales y frena a {abs(d['g_brake_max']):.1f}G"
+        for d in drivers) + ".")
     summaries["throttle"] = ("Gas medio en la vuelta: " + " · ".join(
         f"{e['key']} {float(np.mean(e['ch']['throttle'])):.0f}%" for e in entries) + ".")
     summaries["brake"] = ("Porcentaje de la vuelta frenando: " + " · ".join(
