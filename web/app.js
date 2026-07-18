@@ -906,6 +906,16 @@ function drawTelCharts(zone, d, Z = null) {
     return { anns, meta };
   };
 
+  // interpolación lineal (x ascendente) — para alinear señales entre pilotos
+  const interpLin = (xs, ys, x2) => {
+    let j = 0;
+    return x2.map((v) => {
+      while (j < xs.length - 2 && xs[j + 1] < v) j++;
+      const t2 = Math.max(0, Math.min(1, (v - xs[j]) / ((xs[j + 1] - xs[j]) || 1)));
+      return ys[j] + t2 * (ys[j + 1] - ys[j]);
+    });
+  };
+
   T.telemetria.appendChild(el(`<div class="section-title" id="sec-tel">Telemetría de vuelta</div>`));
 
   // circuito: trazado real por GPS coloreado por velocidad (vuelta de referencia)
@@ -1221,13 +1231,26 @@ function drawTelCharts(zone, d, Z = null) {
       </ul></details></div>`));
   }
 
-  // VELOCIDAD
+  // ── PERFIL DE VELOCIDAD + franja Δv + VENTAJA ACUMULADA (cierra con oficiales)
+  let sumVel = d.summaries.speed || "";
+  if (d.drivers.length >= 2 && d.drivers.every((x) => x.lap_time)) {
+    const masRapido = d.drivers.reduce((a, b) => (b.lap_time < a.lap_time ? b : a));
+    const masVmax = d.drivers.reduce((a, b) => (b.vmax > a.vmax ? b : a));
+    const otro = [...d.drivers].filter((x) => x !== masRapido)
+      .sort((a, b) => a.lap_time - b.lap_time)[0];
+    sumVel = `${masRapido.code} fue ${(otro.lap_time - masRapido.lap_time).toFixed(3)}s más rápido` +
+      (masVmax !== masRapido
+        ? ` aunque ${masVmax.code} alcanzó ${(masVmax.vmax - masRapido.vmax).toFixed(0)} km/h más de punta: la vuelta se gana donde la velocidad es baja y cada km/h vale más tiempo.`
+        : ` y además registró la mayor punta (${masVmax.vmax.toFixed(0)} km/h).`);
+  }
   const cVel = chartCard({
-    title: "Velocidad (línea sólida = referencia, guiones = siguientes)",
-    sub: lapLabels, summary: d.summaries.speed || "",
-    tips: ["<b>¿Una línea llega más alto en recta?</b> → menos ala o mejor tracción a la salida de la curva previa.",
+    title: "Perfil de velocidad",
+    sub: `${lapLabels} · sólida = referencia, discontinua = rivales · sectores estimados por telemetría calibrada`,
+    summary: sumVel,
+    tips: ["<b>¿Una línea llega más alto en recta?</b> → es el resultado NETO: menos ala, mejor tracción previa, rebufo o modo de motor — crúzala con acelerador y marchas antes de atribuir la causa.",
            "<b>¿Valle más estrecho en una curva?</b> → frena más tarde y suelta antes: ahí gana el tiempo.",
-           "Las líneas verticales tenues separan los sectores S1/S2/S3."],
+           "5 km/h extra en curva lenta valen MÁS tiempo que 5 km/h en recta: el tiempo por metro va con 1/v² — por eso se puede perder la vuelta ganando la Vmax.",
+           "La franja de abajo es la DIFERENCIA de velocidad: hace visible por qué la ventaja acumulada sube o baja."],
   });
   T.telemetria.appendChild(cVel.card);
   Plotly.newPlot(cVel.plot, d.drivers.map((x, i) => ({
@@ -1236,39 +1259,140 @@ function drawTelCharts(zone, d, Z = null) {
     hovertemplate: `<b>${x.code}</b> · %{y:.0f} km/h<extra></extra>`,
   })), baseLayout({
     height: 480, hovermode: "x unified", shapes: sectorShapes,
-    annotations: [...sectorAnnots, ...winnerAnnots, ...zoneAnnots],
+    annotations: [...sectorAnnots, ...winnerAnnots, ...zoneAnnots,
+      ...(d.corners || []).map((c) => ({ x: c.d, yref: "paper", y: 1.005,
+        text: String(c.n), showarrow: false, font: { size: 8, color: "#5f6b7d" } }))],
     margin: { l: 56, r: 14, t: 42, b: 48 },
-    xaxis: { ...baseLayout().xaxis, ...cornerAxis },
+    xaxis: { ...baseLayout().xaxis, title: { text: "DISTANCIA DE VUELTA (M) · arriba: curvas", font: { size: 10 } } },
     yaxis: { ...baseLayout().yaxis, title: { text: "KM/H", font: { size: 10 } } },
     legend: { orientation: "h", y: 1.08, x: 1, xanchor: "right" },
   }), PLOTLY_CFG);
   SYNC.push(cVel.plot);
+
+  // franja Δv (rival − referencia), alineada por fracción de vuelta
+  const rivalesV = d.drivers.slice(1);
+  if (rivalesV.length) {
+    const refV = d.drivers[0];
+    const dTotR = refV.d[refV.d.length - 1];
+    const sRef = refV.d.map((v) => v / dTotR);
+    const plotDv = el(`<div></div>`);
+    cVel.card.querySelector(".chart-body").appendChild(plotDv);
+    const series = rivalesV.map((r) => {
+      const dTotB = r.d[r.d.length - 1];
+      const vOnRef = interpLin(r.d.map((v) => v / dTotB), r.speed, sRef);
+      return { r, dv: vOnRef.map((v, i) => v - refV.speed[i]) };
+    });
+    const trazasDv = [];
+    if (series.length === 1) {
+      const { r, dv } = series[0];
+      trazasDv.push({ type: "scatter", mode: "lines", x: refV.d,
+        y: dv.map((v) => Math.max(v, 0)), fill: "tozeroy",
+        fillcolor: rgba(r.color, 0.1), line: { width: 0 },
+        hoverinfo: "skip", showlegend: false });
+      trazasDv.push({ type: "scatter", mode: "lines", x: refV.d,
+        y: dv.map((v) => Math.min(v, 0)), fill: "tozeroy",
+        fillcolor: rgba(refV.color, 0.1), line: { width: 0 },
+        hoverinfo: "skip", showlegend: false });
+    }
+    series.forEach(({ r, dv }) => trazasDv.push({
+      type: "scatter", mode: "lines", name: `Δv ${r.code}`, x: refV.d, y: dv,
+      line: { color: r.color, width: 1.5 },
+      hovertemplate: `<b>Δv ${r.code} − ${d.ref}</b> · %{y:+.0f} km/h<extra></extra>` }));
+    Plotly.newPlot(plotDv, trazasDv, baseLayout({
+      height: 170, hovermode: "x unified", shapes: sectorShapes,
+      margin: { l: 56, r: 14, t: 6, b: 30 },
+      annotations: [{ xref: "paper", yref: "paper", x: 0.005, y: 0.96, xanchor: "left",
+        text: `Δ VELOCIDAD · rival − ${d.ref} · arriba = rival más rápido`,
+        showarrow: false, font: { size: 9, color: "#77839a" } }],
+      xaxis: { ...baseLayout().xaxis, showticklabels: false },
+      yaxis: { ...baseLayout().yaxis, title: { text: "ΔKM/H", font: { size: 9 } },
+               zeroline: true, zerolinecolor: "rgba(255,255,255,.3)" },
+      showlegend: false,
+    }), PLOTLY_CFG);
+    SYNC.push(plotDv);
+  }
   T.telemetria.appendChild(el(`<div style="height:18px"></div>`));
 
-  // DELTA (si hay 2+ pilotos)
+  // VENTAJA ACUMULADA (delta calibrado: el final ES la diferencia oficial)
   const conDelta = d.drivers.filter((x) => x.delta);
   if (conDelta.length) {
+    const cals = d.drivers.filter((x) => x.t_cal_ms != null)
+      .map((x) => `${x.code} ${x.t_cal_ms >= 0 ? "+" : ""}${Math.round(x.t_cal_ms)} ms`);
+    const peorCal = Math.max(0, ...d.drivers.map((x) => Math.abs(x.t_cal_ms || 0)));
+    const calidad = peorCal <= 100 ? "buena" : peorCal <= 300 ? "aceptable" : "baja";
+
+    const rival0 = conDelta[0];
+    const finD = rival0.delta[rival0.delta.length - 1];
+    const enDist = (dist) => {
+      const dd2 = rival0.delta_d;
+      let j = 0;
+      while (j < dd2.length - 1 && dd2[j + 1] < dist) j++;
+      return rival0.delta[j];
+    };
+    let ganancias = "";
+    if ((d.cuts || []).length === 2) {
+      const g1 = enDist(d.cuts[0]);
+      const g2 = enDist(d.cuts[1]) - enDist(d.cuts[0]);
+      const g3 = finD - enDist(d.cuts[1]);
+      const gTxt = (v, lbl) => `${lbl}: ${v <= 0 ? rival0.code : d.ref} +${Math.abs(v).toFixed(3)}`;
+      ganancias = ` Ganancias por sector — ${gTxt(g1, "S1")} · ${gTxt(g2, "S2")} · ${gTxt(g3, "S3")}.`;
+    }
+    const sumDelta = `${finD <= 0 ? rival0.code : d.ref} termina delante por ${Math.abs(finD).toFixed(3)}s — el punto final cierra con los tiempos oficiales.` + ganancias;
+
     const cDelta = chartCard({
-      title: `Delta vs ${d.ref}`, sub: "abajo = más rápido que la referencia",
-      summary: d.summaries.delta || "",
-      tips: [`<b>¿La línea baja?</b> → ese piloto le está GANANDO tiempo a ${d.ref} en ese tramo.`,
-             "<b>¿Sube de golpe en una curva?</b> → ahí lo pierde: compara la frenada en esa zona.",
-             "El valor al final de la vuelta es la diferencia total de la vuelta rápida."],
+      title: `Ventaja acumulada vs ${d.ref}`,
+      sub: `arriba = ${d.ref} por delante · abajo = el rival por delante`,
+      summary: sumDelta,
+      tips: [`<b>¿La línea baja?</b> → el rival le está GANANDO tiempo a ${d.ref}; la INCLINACIÓN es la velocidad a la que lo gana.`,
+             "<b>¿Sube de golpe en una curva?</b> → ahí lo pierde: compara esa frenada en el perfil de velocidad y la Δv.",
+             "El punto final ES la diferencia real de vuelta: el tiempo integrado de cada piloto se calibra a su tiempo oficial y la corrección aplicada se declara abajo.",
+             "Con un solo rival, el sombreado colorea quién va por delante en cada tramo."],
     });
     T.telemetria.appendChild(cDelta.card);
-    Plotly.newPlot(cDelta.plot, conDelta.map((x) => ({
+    const trazasDelta = [];
+    if (conDelta.length === 1) {
+      trazasDelta.push({ type: "scatter", mode: "lines", x: rival0.delta_d,
+        y: rival0.delta.map((v) => Math.max(v, 0)), fill: "tozeroy",
+        fillcolor: rgba(d.drivers[0].color, 0.08), line: { width: 0 },
+        hoverinfo: "skip", showlegend: false });
+      trazasDelta.push({ type: "scatter", mode: "lines", x: rival0.delta_d,
+        y: rival0.delta.map((v) => Math.min(v, 0)), fill: "tozeroy",
+        fillcolor: rgba(rival0.color, 0.08), line: { width: 0 },
+        hoverinfo: "skip", showlegend: false });
+    }
+    conDelta.forEach((x) => trazasDelta.push({
       type: "scatter", mode: "lines", name: `Δ ${x.code}`, x: x.delta_d, y: x.delta,
       line: { color: x.color, width: 2 },
       hovertemplate: `<b>${x.code}</b> · Δ %{y:+.3f}s<extra></extra>`,
-    })), baseLayout({
+    }));
+    const anotsD = conDelta.map((r) => ({
+      x: r.delta_d[r.delta_d.length - 1], y: r.delta[r.delta.length - 1],
+      text: `${r.code} ${r.delta[r.delta.length - 1] >= 0 ? "+" : ""}${r.delta[r.delta.length - 1].toFixed(3)}s`,
+      showarrow: false, xanchor: "left", xshift: 6,
+      font: { size: 10, color: r.color } }));
+    if (conDelta.length === 1) {
+      const iMax = rival0.delta.indexOf(Math.max(...rival0.delta));
+      const iMin = rival0.delta.indexOf(Math.min(...rival0.delta));
+      if (rival0.delta[iMax] > 0.05)
+        anotsD.push({ x: rival0.delta_d[iMax], y: rival0.delta[iMax], ay: -16, ax: 0,
+          text: `máx ${d.ref} +${rival0.delta[iMax].toFixed(2)}`, showarrow: true,
+          arrowcolor: "rgba(255,255,255,.3)", font: { size: 9, color: "#8a919e" } });
+      if (rival0.delta[iMin] < -0.05)
+        anotsD.push({ x: rival0.delta_d[iMin], y: rival0.delta[iMin], ay: 16, ax: 0,
+          text: `máx ${rival0.code} ${rival0.delta[iMin].toFixed(2)}`, showarrow: true,
+          arrowcolor: "rgba(255,255,255,.3)", font: { size: 9, color: "#8a919e" } });
+    }
+    Plotly.newPlot(cDelta.plot, trazasDelta, baseLayout({
       height: 340, hovermode: "x unified", shapes: sectorShapes,
-      annotations: sectorAnnots,
-      margin: { l: 56, r: 14, t: 30, b: 48 },
-      xaxis: { ...baseLayout().xaxis, ...cornerAxis },
+      annotations: [...sectorAnnots, ...anotsD],
+      margin: { l: 56, r: 64, t: 30, b: 48 },
+      xaxis: { ...baseLayout().xaxis, title: { text: "DISTANCIA DE VUELTA (M)", font: { size: 10 } } },
       yaxis: { ...baseLayout().yaxis, title: { text: `SEGUNDOS VS ${d.ref}`, font: { size: 10 } },
                zeroline: true, zerolinecolor: accLine(0.5), zerolinewidth: 1.5 },
       legend: { orientation: "h", y: 1.1, x: 1, xanchor: "right" },
     }), PLOTLY_CFG);
+    const badgeD = el(`<div class="chart-summary${calidad === "baja" ? " warn" : ""}">DELTA CALIBRADO A TIEMPOS OFICIALES · corrección de integración aplicada: ${cals.join(" · ") || "n/d"} · calidad ${calidad}</div>`);
+    cDelta.card.insertBefore(badgeD, cDelta.card.querySelector(".chart-guide"));
     SYNC.push(cDelta.plot);
     T.telemetria.appendChild(el(`<div style="height:18px"></div>`));
   }

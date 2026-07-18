@@ -16,12 +16,25 @@ def test_delta_series_b_mas_lento():
     assert np.all(np.diff(dv) >= 0)          # pierde de forma monótona
 
 
-def test_delta_series_recorta_al_mas_corto():
+def test_delta_series_alinea_por_fraccion_y_cierra():
+    # trayectorias de longitud DISTINTA (líneas distintas): se alinean por
+    # fracción de vuelta, la malla de la referencia se conserva completa y
+    # el último punto cierra con la diferencia total de tiempos
     d_ref = np.linspace(0, 1000, 101)
+    t_ref = np.linspace(0, 90, 101)
     d_b = np.linspace(0, 900, 91)            # la vuelta de B mide menos
-    dx, dv = _delta_series(d_ref, d_ref / 50, d_b, d_b / 50)
-    assert dx[-1] <= 900
-    assert np.allclose(dv, 0, atol=1e-9)     # mismos tiempos → delta 0
+    t_b = np.linspace(0, 89, 91)             # y B es 1s más rápido
+    dx, dv = _delta_series(d_ref, t_ref, d_b, t_b)
+    assert dx[-1] == 1000                    # malla completa, sin recortes
+    assert abs(dv[0]) < 1e-9                 # arranca en cero
+    assert abs(dv[-1] - (-1.0)) < 1e-9       # cierra: B gana exactamente 1s
+
+
+def test_delta_series_mismos_tiempos_da_cero():
+    d_ref = np.linspace(0, 1000, 101)
+    d_b = np.linspace(0, 900, 91)
+    dx, dv = _delta_series(d_ref, d_ref / 50, d_b, d_b / 45)  # 20s ambos
+    assert np.allclose(dv[-1], 0, atol=1e-9)
 
 
 def test_phase_pcts():

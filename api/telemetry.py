@@ -124,12 +124,15 @@ def _ready_session(sid):
 # ────────────────────────────────────────────── helpers puros (testeables)
 
 def _delta_series(d_ref, t_ref, d_b, t_b):
-    """Delta de tiempo de B respecto a la referencia sobre la malla de la
-    referencia. Positivo = B va por detrás (ref más rápido hasta ese punto)."""
-    d_max = min(d_ref[-1], d_b[-1])
-    mask = d_ref <= d_max
-    t_b_on_ref = np.interp(d_ref[mask], d_b, t_b)
-    return d_ref[mask], t_b_on_ref - t_ref[mask]
+    """Delta de tiempo de B respecto a la referencia, alineado por FRACCIÓN
+    de vuelta: cada trayectoria mide distinto (líneas distintas), así que
+    comparar al mismo metro desalinea y recorta el final. Con los tiempos
+    calibrados al oficial, el último punto cierra EXACTO con la diferencia
+    real de tiempos de vuelta. Positivo = B va por detrás."""
+    s_ref = d_ref / d_ref[-1]
+    s_b = d_b / d_b[-1]
+    t_b_on_ref = np.interp(s_ref, s_b, t_b)
+    return d_ref, t_b_on_ref - t_ref
 
 
 def _phase_pcts(throttle, brake, dt):
@@ -171,11 +174,24 @@ def _lap_channels(sid, code, lap_number=None):
     v_ms = np.maximum(np.asarray(gg["speed_kmh"], dtype=float) / 3.6, 0.1)
     dd = np.diff(d, prepend=float(d[0]))
     dd[0] = 0.0
-    dt = dd / v_ms
+    # integración TRAPEZOIDAL: dt = Δd / v_media del tramo (no v del extremo)
+    v_mid = (v_ms + np.roll(v_ms, 1)) / 2.0
+    v_mid[0] = v_ms[0]
+    dt = dd / v_mid
     t_cum = np.cumsum(dt)
+    lt = lap["LapTime"].total_seconds() if lap["LapTime"] is not None else None
+    # CALIBRACIÓN al tiempo OFICIAL: la integración de velocidad acumula un
+    # error de ~0.1-0.3s por vuelta y cada piloto carga el suyo → el delta no
+    # cerraba con los tiempos reales. Se estira linealmente para que el total
+    # sea EXACTO; cal_ms guarda cuánto hubo que corregir (métrica de calidad).
+    cal_ms = None
+    if lt and float(t_cum[-1]) > 0:
+        cal_ms = round((float(t_cum[-1]) - lt) * 1000, 1)
+        factor = lt / float(t_cum[-1])
+        t_cum = t_cum * factor
+        dt = dt * factor
     x = np.interp(d, tel["Distance"], tel["X"])
     y = np.interp(d, tel["Distance"], tel["Y"])
-    lt = lap["LapTime"].total_seconds() if lap["LapTime"] is not None else None
     cuts, _approx = _get_sector_cut_distances(lap, tel)
     # cuts llega como [("S1", d1), ("S2", d2), ("S3", fin)] → solo las 2 fronteras
     cut_ds = [float(c[1]) for c in cuts[:2]] if cuts else []
@@ -185,7 +201,7 @@ def _lap_channels(sid, code, lap_number=None):
         "brake": gg["brake"], "gear": gg["gear"],
         "glat": gg["glat"], "glong": gg["glong"],
         "lap_time": lt, "lap_number": int(lap["LapNumber"]),
-        "cuts": cut_ds,
+        "cuts": cut_ds, "cal_ms": cal_ms,
     }
     _TEL_CACHE[key] = out
     return out
@@ -314,7 +330,7 @@ def _assemble(s, entries):
         item = {
             "code": e["key"], "name": e["name"], "color": e["color"],
             "lap_time": ch["lap_time"], "lap_label": fmt_lap(ch["lap_time"]),
-            "lap_number": ch["lap_number"],
+            "lap_number": ch["lap_number"], "t_cal_ms": ch.get("cal_ms"),
             "d": _downsample(ch["d"], st, 1),
             "speed": _downsample(ch["speed"], st, 1),
             "throttle": _downsample(ch["throttle"], st, 1),
