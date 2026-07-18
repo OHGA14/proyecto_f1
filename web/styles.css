@@ -678,3 +678,24 @@ html[data-theme="spacex"] .btn-red:hover {
 
 /* respiración entre secciones principales */
 html[data-theme="spacex"] .section-title { margin: 34px 0 14px; }
+
+/* ─────────────────── dominancia: cobertura vs impacto */
+.dom-bar { margin: 6px 18px 10px; }
+.dom-title { font-size: 10px; letter-spacing: 1.6px; color: var(--ink3); font-weight: 700; margin-bottom: 8px; }
+.dom-row { display: flex; align-items: center; gap: 10px; margin: 4px 0; font-size: 12px; }
+.dom-row b { width: 42px; letter-spacing: .5px; }
+.dom-track { flex: 1; height: 8px; background: rgba(255, 255, 255, .05); border-radius: 2px; overflow: hidden; }
+.dom-track i { display: block; height: 100%; }
+.dom-row small { color: var(--ink2); min-width: 160px; text-align: right; font-variant-numeric: tabular-nums; }
+
+/* ─────────────────── G-G cuadrada + panel de máximos */
+.grid.cols-46-54 { grid-template-columns: 46fr 54fr; }
+@media (max-width: 1100px) { .grid.cols-46-54 { grid-template-columns: 1fr; } }
+.gg-card .chart-body { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: center; }
+.gg-card .plot { flex: 0 0 auto; }
+.gg-metrics { flex: 1 1 200px; min-width: 200px; padding: 0 10px; }
+.gg-m-title { font-size: 10px; letter-spacing: 1.6px; color: var(--ink3); font-weight: 700; margin-bottom: 8px; }
+.gg-metrics table { font-size: 12.5px; }
+.gg-metrics th.num, .gg-metrics td.num { text-align: right; }
+.gg-metrics td, .gg-metrics th { padding: 5px 8px; }
+.gg-lead { color: var(--ink); font-weight: 800; }

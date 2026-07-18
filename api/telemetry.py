@@ -354,17 +354,24 @@ def _assemble(s, entries):
     segments = []
     for i in range(_N_MINISECTORS):
         d0, d1 = bounds[i], bounds[i + 1]
-        best_k, best_t = None, None
+        # mejor Y segundo mejor tiempo del tramo → el margen dice POR CUÁNTO
+        best_k, best_t, second_t = None, None, None
         for k in keys:
             ch = chans[k]
             tt = np.interp([d0, d1], ch["d"], ch["t"])
             dtse = float(tt[1] - tt[0])
             if best_t is None or dtse < best_t:
+                second_t = best_t
                 best_k, best_t = k, dtse
+            elif second_t is None or dtse < second_t:
+                second_t = dtse
         m = (ch_ref["d"] >= d0) & (ch_ref["d"] <= d1 + 1)
         segments.append({"x": _downsample(ch_ref["x"][m], 2, 0),
                          "y": _downsample(ch_ref["y"][m], 2, 0),
-                         "code": best_k, "color": colores.get(best_k, "#9aa0aa")})
+                         "code": best_k, "color": colores.get(best_k, "#9aa0aa"),
+                         "n": i + 1, "d0": round(float(d0)), "d1": round(float(d1)),
+                         "margin": (round(second_t - best_t, 3)
+                                    if second_t is not None else None)})
     dom_counts = {}
     for seg in segments:
         dom_counts[seg["code"]] = dom_counts.get(seg["code"], 0) + 1

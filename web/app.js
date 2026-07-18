@@ -881,6 +881,31 @@ function drawTelCharts(zone, d, Z = null) {
   const DASHES = ["solid", "dash", "dot", "longdash", "dashdot"];
   const lapLabels = d.drivers.map((x) => `${x.code} ${x.lap_label} (V${x.lap_number})`).join(" · ");
 
+  // marcadores compartidos por los mapas del circuito: curvas con fondo legible,
+  // rombo de meta y flecha de sentido — mismos símbolos en todos los mapas
+  const marcadoresMapa = () => {
+    const refM = d.drivers[0];
+    const anns = (d.corners || []).map((c) => ({
+      x: c.x, y: c.y, text: String(c.n), showarrow: false,
+      bgcolor: "rgba(3,5,7,.72)", bordercolor: "rgba(255,255,255,.10)",
+      borderwidth: 1, borderpad: 2, font: { size: 10.5, color: "#b8c7d5" },
+    }));
+    let meta = null;
+    if (refM && refM.x && refM.x.length > 10) {
+      const nM = refM.x.length, iA = Math.floor(nM * 0.03), iB = Math.floor(nM * 0.055);
+      anns.push({ x: refM.x[iB], y: refM.y[iB], ax: refM.x[iA], ay: refM.y[iA],
+        axref: "x", ayref: "y", text: "", showarrow: true, arrowhead: 2,
+        arrowsize: 1.3, arrowwidth: 1.6, arrowcolor: "#e8eaed" });
+      meta = { type: "scatter", mode: "markers+text", x: [refM.x[0]], y: [refM.y[0]],
+        showlegend: false, hoverinfo: "skip",
+        marker: { size: 10, color: "#e8eaed", symbol: "diamond",
+                  line: { color: "#11141b", width: 1.5 } },
+        text: ["META"], textposition: "top center",
+        textfont: { size: 9, color: "#8a919e" } };
+    }
+    return { anns, meta };
+  };
+
   T.telemetria.appendChild(el(`<div class="section-title" id="sec-tel">Telemetría de vuelta</div>`));
 
   // circuito: trazado real por GPS coloreado por velocidad (vuelta de referencia)
@@ -905,8 +930,7 @@ function drawTelCharts(zone, d, Z = null) {
     });
     T.resumen.appendChild(cCir.card);
     T.resumen.appendChild(el(`<div style="height:18px"></div>`));
-    const nC = refC.x.length;
-    const iA = Math.floor(nC * 0.03), iB = Math.floor(nC * 0.055);
+    const marcasCir = marcadoresMapa();
     Plotly.newPlot(cCir.plot, [
       { type: "scatter", mode: "lines", x: refC.x, y: refC.y, hoverinfo: "skip",
         showlegend: false, line: { color: "rgba(255,255,255,.07)", width: 11 } },
@@ -917,22 +941,11 @@ function drawTelCharts(zone, d, Z = null) {
                               title: { text: "VELOCIDAD (KM/H)", font: { size: 9.5, color: "#8a919e" }, side: "bottom" },
                               tickfont: { size: 9.5, color: "#8a919e" } } },
         hovertemplate: "%{marker.color:.0f} km/h<extra></extra>" },
-      { type: "scatter", mode: "markers+text", x: [refC.x[0]], y: [refC.y[0]],
-        showlegend: false, hoverinfo: "skip",
-        marker: { size: 11, color: "#e8eaed", symbol: "diamond",
-                  line: { color: "#11141b", width: 1.5 } },
-        text: ["META"], textposition: "top center",
-        textfont: { size: 9, color: "#8a919e" } },
-    ], baseLayout({
+      marcasCir.meta,
+    ].filter(Boolean), baseLayout({
       height: 620, margin: { l: 10, r: 10, t: 10, b: 10 },
       xaxis: { visible: false }, yaxis: { visible: false, scaleanchor: "x" },
-      annotations: [
-        ...(d.corners || []).map((c) => ({ x: c.x, y: c.y, text: String(c.n),
-          showarrow: false, font: { size: 10, color: "#8a919e" } })),
-        { x: refC.x[iB], y: refC.y[iB], ax: refC.x[iA], ay: refC.y[iA],
-          axref: "x", ayref: "y", text: "", showarrow: true, arrowhead: 2,
-          arrowsize: 1.3, arrowwidth: 1.6, arrowcolor: "#e8eaed" },
-      ],
+      annotations: marcasCir.anns,
     }), PLOTLY_CFG);
   }
 
@@ -949,91 +962,240 @@ function drawTelCharts(zone, d, Z = null) {
       </ul></details></div>`));
   }
 
-  // fila 1: mapa de dominancia + G-G
-  const row1 = el(`<div class="grid cols-2" style="margin-bottom:18px"></div>`);
+  // fila 1: mapa de dominancia (46%) + G-G cuadrada con métricas (54%)
+  const row1 = el(`<div class="grid cols-46-54" style="margin-bottom:18px"></div>`);
   T.fisica.appendChild(row1);
 
+  // ── dominancia: cobertura (tramos) e impacto (ventaja acumulada) por piloto
+  const nSegs = (d.segments || []).length;
+  const sectorDe = (s) => 1 + (d.cuts || []).filter((c) => c <= (s.d0 + s.d1) / 2).length;
+  const domStats = {};
+  (d.segments || []).forEach((s) => {
+    const e2 = domStats[s.code] = domStats[s.code] || { n: 0, t: 0, color: s.color };
+    e2.n += 1; e2.t += s.margin || 0;
+  });
+  const porSector = {};
+  (d.segments || []).forEach((s) => {
+    const sec = sectorDe(s);
+    porSector[sec] = porSector[sec] || {};
+    porSector[sec][s.code] = (porSector[sec][s.code] || 0) + (s.margin || 0);
+  });
+  const domOrden = Object.entries(domStats).sort((a, b) => b[1].n - a[1].n);
+  const masTramos = domOrden[0];
+  const masTiempo = [...domOrden].sort((a, b) => b[1].t - a[1].t)[0];
+  const ganadorSec = Object.keys(porSector).sort().map((sec) => {
+    const g = Object.entries(porSector[sec]).sort((a, b) => b[1] - a[1])[0];
+    return `S${sec}: ${g[0]}`;
+  }).join(" · ");
+  const sumMapa = masTramos
+    ? `${masTramos[0]} ganó más tramos (${masTramos[1].n} de ${nSegs})` +
+      (masTiempo && masTiempo[0] !== masTramos[0]
+        ? `, pero la mayor ventaja acumulada es de ${masTiempo[0]} (${masTiempo[1].t.toFixed(3)}s). `
+        : ` y también la mayor ventaja acumulada (${masTramos[1].t.toFixed(3)}s). `) +
+      `Dominio por sector — ${ganadorSec}.`
+    : (d.summaries.map || "");
+  const domBarHtml = nSegs ? `<div class="dom-bar">
+    <div class="dom-title">MINI-SECTORES GANADOS · ${nSegs} TRAMOS · barra = cobertura · cifra final = ventaja acumulada</div>
+    ${domOrden.map(([code, s2]) => `
+      <div class="dom-row"><b style="color:${s2.color}">${code}</b>
+        <span class="dom-track"><i style="width:${(s2.n / nSegs * 100).toFixed(0)}%;background:${s2.color}"></i></span>
+        <small>${s2.n} · ${(s2.n / nSegs * 100).toFixed(0)}% · ${s2.t.toFixed(3)}s</small></div>`).join("")}
+  </div>` : "";
+
   const cMap = chartCard({
-    title: "Mapa de dominancia", sub: "color = quién gana cada mini-sector",
-    summary: d.summaries.map || "",
+    title: "Mapa de dominancia",
+    sub: "cada tramo = el piloto con MENOR TIEMPO en ese mini-sector · grosor = tamaño de la ventaja",
+    summary: sumMapa,
+    legendHtml: domBarHtml,
     tips: ["<b>¿Un color domina las rectas y otro las curvas?</b> → configuraciones distintas: menos ala vs más carga.",
-           "Los números son las curvas oficiales del circuito."],
+           "<b>¿Línea gruesa?</b> → ventaja clara en ese tramo; fina = se ganó por milésimas.",
+           "Pasa el cursor por un tramo: quién lo ganó, por cuánto y en qué sector.",
+           "La barra de abajo separa COBERTURA (tramos ganados) de IMPACTO (segundos sumados): ganar 11 tramos por milésimas puede valer menos que ganar 7 con ventajas grandes."],
   });
   row1.appendChild(cMap.card);
-  const segTraces = d.segments.map((s) => ({
-    type: "scatter", mode: "lines", x: s.x, y: s.y, showlegend: false,
-    line: { color: s.color, width: 5 }, hoverinfo: "skip",
-  }));
-  const legendTraces = d.drivers.map((x) => ({
-    type: "scatter", mode: "lines", x: [null], y: [null], name: x.code,
-    line: { color: x.color, width: 5 },
-  }));
-  Plotly.newPlot(cMap.plot, [...segTraces, ...legendTraces], baseLayout({
-    height: 560, margin: { l: 10, r: 10, t: 10, b: 10 },
-    xaxis: { visible: false }, yaxis: { visible: false, scaleanchor: "x" },
-    legend: { orientation: "h", y: -0.02, x: 0.5, xanchor: "center" },
-    annotations: d.corners.map((c) => ({
-      x: c.x, y: c.y, text: String(c.n), showarrow: false,
-      font: { size: 10, color: "#8a919e" },
-    })),
-  }), PLOTLY_CFG);
-
-  const cGG = chartCard({
-    title: "G-G · envolvente de agarre",
-    sub: "la línea gruesa es el LÍMITE que cada coche alcanzó (percentil 95)",
-    summary: d.summaries.gg || "",
-    tips: ["<b>¿Una envolvente más ancha a los lados?</b> → ese coche genera más agarre lateral: más carga aerodinámica o mejor goma.",
-           "<b>¿Más profunda abajo?</b> → frena más fuerte y tarde; abajo es FRENADA, arriba TRACCIÓN.",
-           "<b>¿Envolvente 'cuadrada' en las esquinas?</b> → combina frenada y giro a la vez (trail braking): pilotaje al límite.",
-           "Los círculos punteados son referencias de 1G a 5G; los puntos, todas las muestras de la vuelta."],
-  });
-  row1.appendChild(cGG.card);
   {
-    const maxAbs = Math.max(2.5, ...d.drivers.flatMap((x) =>
-      [...(x.env_x || []), ...(x.env_y || [])].map(Math.abs))) * 1.18;
-    const circulos = [];
-    for (let g = 1; g <= Math.floor(maxAbs); g++)
-      circulos.push({ type: "circle", x0: -g, x1: g, y0: -g, y1: g,
-        line: { color: "rgba(255,255,255,.09)", width: 1, dash: "dot" } });
-    const trazas = [];
-    d.drivers.forEach((x) => {
-      trazas.push({ type: "scatter", mode: "markers", name: x.code, legendgroup: x.code,
-        x: x.glat, y: x.glong, showlegend: false,
-        marker: { color: rgba(x.color, 0.22), size: 3 }, hoverinfo: "skip" });
+    const maxMargen = Math.max(...(d.segments || []).map((s) => s.margin || 0), 0.001);
+    const anchoPor = (m2 = 0) => 5 + 3 * Math.sqrt((m2 || 0) / maxMargen);
+    // pista base continua: los colores van montados sobre el asfalto
+    const base = (d.segments || []).map((s) => ({
+      type: "scatter", mode: "lines", x: s.x, y: s.y, showlegend: false,
+      hoverinfo: "skip", line: { color: "rgba(255,255,255,.10)", width: 10 },
+    }));
+    const segTraces = (d.segments || []).map((s) => ({
+      type: "scatter", mode: "lines", x: s.x, y: s.y, showlegend: false,
+      line: { color: s.color, width: anchoPor(s.margin) },
+      customdata: s.x.map(() => [s.n, s.code,
+        s.margin != null ? s.margin.toFixed(3) : "—", sectorDe(s)]),
+      hovertemplate: "<b>Mini-sector %{customdata[0]}</b> · S%{customdata[3]}<br>" +
+        "Más rápido: %{customdata[1]}<br>Ventaja: %{customdata[2]}s<extra></extra>",
+    }));
+    const legendTraces = d.drivers.map((x) => ({
+      type: "scatter", mode: "lines", x: [null], y: [null], name: x.code,
+      line: { color: x.color, width: 5 },
+    }));
+    const marcasDom = marcadoresMapa();
+    Plotly.newPlot(cMap.plot,
+      [...base, ...segTraces, ...legendTraces, marcasDom.meta].filter(Boolean),
+      baseLayout({
+        height: 560, margin: { l: 10, r: 10, t: 10, b: 10 },
+        xaxis: { visible: false }, yaxis: { visible: false, scaleanchor: "x" },
+        legend: { orientation: "h", y: -0.02, x: 0.5, xanchor: "center" },
+        annotations: marcasDom.anns,
+      }), PLOTLY_CFG);
+  }
+
+  // ── G-G cuadrada: envolvente operativa P95 + panel de máximos
+  {
+    // máximos por piloto DESDE su envolvente: lateral, frenada, tracción
+    const mets = d.drivers.filter((x) => x.env_x && x.env_x.length).map((x) => ({
+      code: x.code, color: x.color, drv: x,
+      lat: Math.max(...x.env_x.map(Math.abs), 0),
+      fren: Math.abs(Math.min(...x.env_y, 0)),
+      trac: Math.max(...x.env_y, 0),
+    })).sort((a, b) => b.lat - a.lat);
+    const lider = (k) => mets.reduce((a, b2) => (b2[k] > a[k] ? b2 : a), mets[0]);
+    const lLat = lider("lat"), lFren = lider("fren"), lTrac = lider("trac");
+    const sumGG = mets.length
+      ? `${lLat.code} alcanzó el mayor apoyo lateral: ${lLat.lat.toFixed(1)}G` +
+        (mets[1] ? ` (+${(lLat.lat - mets[1].lat).toFixed(1)}G sobre ${mets[1].code})` : "") +
+        `. Mayor frenada: ${lFren.code} (${lFren.fren.toFixed(1)}G) · mayor tracción: ${lTrac.code} (${lTrac.trac.toFixed(1)}G).`
+      : (d.summaries.gg || "");
+
+    const cGG = chartCard({
+      title: "G-G · aceleración alcanzada",
+      sub: "envolvente operativa P95 · más lejos del centro = más aceleración combinada",
+      summary: sumGG,
+      legendHtml: `<div class="pills gg-modes" style="padding:0 18px 10px">
+        <button class="pill" data-m="env">ENVOLVENTES</button>
+        <button class="pill" data-m="ref">NUBE REFERENCIA</button>
+        <button class="pill" data-m="all">TODAS LAS MUESTRAS</button></div>`,
+      tips: ["<b>¿Una envolvente más ancha a los lados?</b> → más agarre lateral aprovechado: carga aerodinámica, goma o confianza.",
+             "<b>¿Más profunda abajo?</b> → frena más fuerte y tarde; abajo es FRENADA, arriba TRACCIÓN.",
+             "<b>¿'Cuadrada' en las esquinas?</b> → combina frenada y giro a la vez (trail braking): pilotaje al límite.",
+             "Esto es lo ALCANZADO por cada dupla piloto-coche en esa vuelta (percentil 95 de sus muestras), no el límite físico absoluto del monoplaza.",
+             "La referencia va sólida y con relleno; los rivales, en línea discontinua. Los botones muestran u ocultan las nubes de puntos."],
     });
-    d.drivers.forEach((x) => {
-      if (!x.env_x) return;
-      trazas.push({ type: "scatter", mode: "lines", name: x.code, legendgroup: x.code,
-        x: x.env_x, y: x.env_y,
-        line: { color: x.color, width: 3, shape: "spline", smoothing: 0.8 },
-        fill: "toself", fillcolor: rgba(x.color, 0.05),
-        hovertemplate: `<b>${x.code}</b> · envolvente<br>lat %{x:.2f}G · long %{y:.2f}G<extra></extra>` });
+    cGG.card.classList.add("gg-card");
+    row1.appendChild(cGG.card);
+
+    const tabla = el(`<div class="gg-metrics">
+      <div class="gg-m-title">MÁXIMOS DE LA VUELTA</div>
+      <table><thead><tr><th></th><th class="num">LATERAL</th><th class="num">FRENADA</th><th class="num">TRACCIÓN</th></tr></thead>
+      <tbody>${mets.map((m2) => `<tr>
+        <td><b style="color:${m2.color}">${m2.code}</b></td>
+        <td class="num${m2 === lLat ? " gg-lead" : ""}">${m2.lat.toFixed(1)}G</td>
+        <td class="num${m2 === lFren ? " gg-lead" : ""}">${m2.fren.toFixed(1)}G</td>
+        <td class="num${m2 === lTrac ? " gg-lead" : ""}">${m2.trac.toFixed(1)}G</td></tr>`).join("")}
+      </tbody></table></div>`);
+    cGG.card.querySelector(".chart-body").appendChild(tabla);
+
+    const puntoExtremo = (drv, tipo) => {
+      const ex = drv.env_x, ey = drv.env_y;
+      let idx = 0;
+      for (let i2 = 1; i2 < ex.length; i2++) {
+        if (tipo === "lat" ? Math.abs(ex[i2]) > Math.abs(ex[idx])
+          : tipo === "fren" ? ey[i2] < ey[idx] : ey[i2] > ey[idx]) idx = i2;
+      }
+      return [ex[idx], ey[idx]];
+    };
+    const tamGG = () => {
+      const disp = cGG.plot.parentElement ? cGG.plot.parentElement.clientWidth : 0;
+      if (!disp) return 560;
+      return Math.max(360, Math.min(620, disp > 700 ? disp - 300 : disp - 24));
+    };
+
+    const dibujaGG = () => {
+      const modo = state.ggMode || "env";
+      cGG.card.querySelectorAll(".gg-modes .pill").forEach((b) =>
+        b.classList.toggle("active", b.dataset.m === modo));
+      const maxAbs = Math.max(2.5, ...d.drivers.flatMap((x) =>
+        [...(x.env_x || []), ...(x.env_y || [])].map(Math.abs))) * 1.15;
+      const circulos = [];
+      for (let g = 1; g <= Math.floor(maxAbs); g++)
+        circulos.push({ type: "circle", x0: -g, x1: g, y0: -g, y1: g,
+          line: { color: "rgba(255,255,255,.09)", width: 1, dash: "dot" } });
+      // orientación de fondo casi invisible: arriba tracción, abajo frenada
+      const zonas = [
+        { type: "rect", x0: -maxAbs, x1: maxAbs, y0: 0, y1: maxAbs, layer: "below",
+          fillcolor: "rgba(56,189,248,.025)", line: { width: 0 } },
+        { type: "rect", x0: -maxAbs, x1: maxAbs, y0: -maxAbs, y1: 0, layer: "below",
+          fillcolor: "rgba(224,36,63,.025)", line: { width: 0 } },
+      ];
+      const trazas = [];
+      const conPuntos = modo === "all" ? d.drivers : modo === "ref" ? d.drivers.slice(0, 1) : [];
+      conPuntos.forEach((x) => trazas.push({
+        type: "scattergl", mode: "markers", name: x.code, legendgroup: x.code,
+        showlegend: false, x: x.glat, y: x.glong,
+        marker: { color: rgba(x.color, modo === "all" ? 0.07 : 0.12), size: 2 },
+        hoverinfo: "skip" }));
+      d.drivers.forEach((x, i2) => {
+        if (!x.env_x) return;
+        const esRef = i2 === 0;
+        trazas.push({ type: "scatter", mode: "lines", name: x.code, legendgroup: x.code,
+          x: x.env_x, y: x.env_y,
+          line: { color: x.color, width: esRef ? 3.5 : 2.2,
+                  dash: esRef ? "solid" : "dash", shape: "linear" },
+          fill: esRef ? "toself" : "none",
+          fillcolor: esRef ? rgba(x.color, 0.06) : undefined,
+          hovertemplate: `<b>${x.code}</b><br>lat %{x:.2f}G · long %{y:.2f}G<extra></extra>` });
+      });
+      // solo los LÍDERES de cada categoría llevan marcador (no una constelación)
+      [[lLat, "lat", "LAT"], [lFren, "fren", "FRENADA"], [lTrac, "trac", "TRACCIÓN"]]
+        .forEach(([m2, tipo, tag]) => {
+          if (!m2) return;
+          const [px, py] = puntoExtremo(m2.drv, tipo);
+          trazas.push({ type: "scatter", mode: "markers+text", x: [px], y: [py],
+            showlegend: false, hoverinfo: "skip",
+            marker: { size: 9, color: m2.color, symbol: "diamond",
+                      line: { color: "#0b0d12", width: 1.5 } },
+            text: [`${m2.code} ${m2[tipo].toFixed(1)}G ${tag}`],
+            textposition: py >= 0 ? "top center" : "bottom center",
+            textfont: { size: 9.5, color: m2.color } });
+        });
+      const lado = tamGG();
+      Plotly.react(cGG.plot, trazas, baseLayout({
+        width: lado, height: lado,
+        margin: { l: 46, r: 12, t: 12, b: 40 },
+        shapes: [...zonas, ...circulos],
+        annotations: [
+          { x: 0, y: maxAbs * 0.95, text: "↑ TRACCIÓN", showarrow: false,
+            font: { size: 9.5, color: "#5d7288" } },
+          { x: 0, y: -maxAbs * 0.95, text: "↓ FRENADA", showarrow: false,
+            font: { size: 9.5, color: "#5d7288" } },
+          { x: -maxAbs * 0.93, y: 0, text: "CURVA DER.", textangle: -90, showarrow: false,
+            font: { size: 9.5, color: "#5d7288" } },
+          { x: maxAbs * 0.93, y: 0, text: "CURVA IZQ.", textangle: 90, showarrow: false,
+            font: { size: 9.5, color: "#5d7288" } },
+          ...circulos.map((c, i2) => ({ x: 0.1, y: (i2 + 1), text: `${i2 + 1}G`,
+            showarrow: false, xanchor: "left",
+            font: { size: 8.5, color: "rgba(255,255,255,.28)" } })),
+        ],
+        xaxis: { ...baseLayout().xaxis, range: [-maxAbs, maxAbs], zeroline: true,
+                 zerolinecolor: "rgba(255,255,255,.14)", showgrid: false,
+                 title: { text: "G LATERAL", font: { size: 10 } } },
+        yaxis: { ...baseLayout().yaxis, range: [-maxAbs, maxAbs], zeroline: true,
+                 zerolinecolor: "rgba(255,255,255,.14)", showgrid: false,
+                 scaleanchor: "x", scaleratio: 1,
+                 title: { text: "G LONG.", font: { size: 10 } } },
+        legend: { orientation: "h", y: -0.1, x: 0.5, xanchor: "center" },
+      }), PLOTLY_CFG);
+    };
+    cGG.card.querySelectorAll(".gg-modes .pill").forEach((b) => {
+      b.onclick = () => { state.ggMode = b.dataset.m; dibujaGG(); };
     });
-    Plotly.newPlot(cGG.plot, trazas, baseLayout({
-      height: 560, margin: { l: 52, r: 14, t: 12, b: 46 },
-      shapes: circulos,
-      annotations: [
-        { x: 0, y: -maxAbs * 0.93, text: "FRENADA", showarrow: false,
-          font: { size: 9.5, color: "#5d7288", family: "Inter" } },
-        { x: 0, y: maxAbs * 0.93, text: "TRACCIÓN", showarrow: false,
-          font: { size: 9.5, color: "#5d7288" } },
-        { x: -maxAbs * 0.9, y: 0, text: "CURVA DER.", textangle: -90, showarrow: false,
-          font: { size: 9.5, color: "#5d7288" } },
-        { x: maxAbs * 0.9, y: 0, text: "CURVA IZQ.", textangle: 90, showarrow: false,
-          font: { size: 9.5, color: "#5d7288" } },
-        ...circulos.map((c, i) => ({ x: 0.1, y: (i + 1), text: `${i + 1}G`,
-          showarrow: false, xanchor: "left",
-          font: { size: 8.5, color: "rgba(255,255,255,.28)" } })),
-      ],
-      xaxis: { ...baseLayout().xaxis, range: [-maxAbs, maxAbs], zeroline: true,
-               zerolinecolor: "rgba(255,255,255,.14)", showgrid: false,
-               title: { text: "G LATERAL", font: { size: 10 } } },
-      yaxis: { ...baseLayout().yaxis, range: [-maxAbs, maxAbs], zeroline: true,
-               zerolinecolor: "rgba(255,255,255,.14)", showgrid: false,
-               scaleanchor: "x", scaleratio: 1,
-               title: { text: "G LONGITUDINAL", font: { size: 10 } } },
-      legend: { orientation: "h", y: -0.12, x: 0.5, xanchor: "center" },
-    }), PLOTLY_CFG);
+    dibujaGG();
+    // el cuadrado se recalibra cuando la tarjeta cambia de tamaño (pestañas, resize)
+    let ggLock = false;
+    new ResizeObserver(() => {
+      if (ggLock) return;
+      ggLock = true;
+      requestAnimationFrame(() => {
+        ggLock = false;
+        const lado = tamGG();
+        if (cGG.plot._fullLayout && Math.abs((cGG.plot.layout.width || 0) - lado) > 10)
+          Plotly.relayout(cGG.plot, { width: lado, height: lado });
+      });
+    }).observe(cGG.card);
   }
 
     if (d.micro) {
