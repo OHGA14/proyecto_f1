@@ -1342,43 +1342,186 @@ function drawTelCharts(zone, d, Z = null) {
     legend: { orientation: "h", y: 1.08, x: 1, xanchor: "right" },
   }), PLOTLY_CFG);
 
-  // DESPLIEGUE DE ENERGÍA (ERS / clipping): aceleración a fondo vs velocidad
-  const cErs = chartCard({
-    title: "Despliegue de energía (ERS)", sub: "solo puntos a fondo, en recta y sin freno",
-    tips: ["<b>¿La nube cae a cero antes de la velocidad punta?</b> → clipping: la batería dejó de empujar al final de la recta.",
-           "<b>¿Una curva de tendencia más alta a media velocidad?</b> → ese coche despliega más energía saliendo de curvas.",
-           "Cada punto = una muestra con gas ≥95%, sin freno y sin carga lateral."],
-  });
-  SYNC.push(cGl.plot);
-  T.fisica.appendChild(cErs.card);
-  T.fisica.appendChild(el(`<div style="height:18px"></div>`));
-  const ersTraces = [];
-  d.drivers.forEach((x) => {
-    const xs = [], ys = [];
-    for (let i = 0; i < x.d.length; i++) {
-      if (x.throttle[i] >= 95 && x.brake[i] < 5 && Math.abs(x.glat[i]) < 0.5) {
-        xs.push(x.speed[i]); ys.push(x.glong[i] * 9.81);
+  // ── ENTREGA LONGITUDINAL EN RECTA: proxy honesto (ex-"ERS")
+  //    mediana por bloques de 5 km/h + banda Q25-Q75, rango comparable,
+  //    selector por recta (zonas de alta velocidad) y muestras opcionales
+  {
+    const cErs = chartCard({
+      title: "Entrega longitudinal en recta",
+      sub: "aceleración neta a fondo vs velocidad · proxy de motor térmico, MGU-K y drag · mediana por bloques de 5 km/h",
+      legendHtml: `<div class="pills ers-ctl" style="padding:0 18px 10px"></div>`,
+      tips: ["La línea es la MEDIANA por bloque de 5 km/h; la banda, el 50% central de las muestras. <b>¿Bandas traslapadas?</b> → la diferencia NO es concluyente.",
+             "La aceleración cae con la velocidad porque el drag crece con v²: <b>una caída suave es NORMAL</b>, no es clipping. Sospecha solo de caídas abruptas y persistentes en la misma recta.",
+             "Se excluyen frenadas, curvas, cambios de marcha (con sus muestras vecinas) y derivadas fuera de patrón (&lt; −2 m/s²).",
+             "2026: ya NO existe el DRS. La aerodinámica activa (modo recta/curva) y el Overtake Mode cambian esta curva y NO vienen en la fuente de datos — por eso es un proxy inferido.",
+             "Solo se compara el RANGO DE VELOCIDAD cubierto por todos los pilotos; fuera de él no se declara ganador."],
+    });
+    SYNC.push(cGl.plot);
+    T.fisica.appendChild(cErs.card);
+    T.fisica.appendChild(el(`<div style="height:18px"></div>`));
+
+    const resumenErs = el(`<div class="chart-summary"></div>`);
+    const warnErs = el(`<div class="chart-summary warn">PROXY INFERIDO · no mide directamente la energía del ERS ni confirma el Overtake Mode.</div>`);
+    const tablaErs = el(`<div class="table-wrap"></div>`);
+    const guiaErs = cErs.card.querySelector(".chart-guide");
+    cErs.card.insertBefore(resumenErs, guiaErs);
+    cErs.card.insertBefore(warnErs, guiaErs);
+    cErs.card.insertBefore(tablaErs, guiaErs);
+
+    // muestras limpias: a fondo, sin freno, poca carga lateral, sin cambio de
+    // marcha adyacente; derivadas fuera de patrón (< -2 m/s²) no puntúan
+    const muestrasDe = (x, zona) => {
+      const xs = [], ys = [];
+      for (let i = 1; i < x.d.length - 1; i++) {
+        const frenando = typeof x.brake[i] === "boolean" ? x.brake[i] : x.brake[i] >= 5;
+        if (x.throttle[i] < 95 || frenando || Math.abs(x.glat[i]) >= 0.5) continue;
+        if (x.gear && (x.gear[i] !== x.gear[i - 1] || x.gear[i + 1] !== x.gear[i])) continue;
+        if (zona && !(x.d[i] >= zona.d0 && x.d[i] <= zona.d1)) continue;
+        const a = x.glong[i] * 9.81;
+        if (a < -2) continue;
+        xs.push(x.speed[i]); ys.push(a);
       }
-    }
-    ersTraces.push({ type: "scatter", mode: "markers", name: x.code,
-      x: xs, y: ys, marker: { color: x.color, size: 4, opacity: 0.35 },
-      hovertemplate: `<b>${x.code}</b> · %{x:.0f} km/h · %{y:.1f} m/s²<extra></extra>` });
-    const fit = poly2fit(xs, ys);
-    if (fit) {
-      const fx = [...xs].sort((a, b) => a - b).filter((v, i, a2) => !i || v > a2[i - 1] + 2);
-      ersTraces.push({ type: "scatter", mode: "lines", showlegend: false,
-        x: fx, y: fx.map((v) => fit[0] * v * v + fit[1] * v + fit[2]),
-        line: { color: x.color, width: 2.5 }, hoverinfo: "skip" });
-    }
-  });
-  Plotly.newPlot(cErs.plot, ersTraces, baseLayout({
-    height: 460, margin: { l: 56, r: 14, t: 12, b: 46 },
-    xaxis: { ...baseLayout().xaxis, title: { text: "VELOCIDAD (KM/H)", font: { size: 10 } },
-             showgrid: true, gridcolor: "rgba(255,255,255,.05)", griddash: "dot" },
-    yaxis: { ...baseLayout().yaxis, title: { text: "ACELERACIÓN (M/S²)", font: { size: 10 } },
-             zeroline: true, zerolinecolor: "rgba(255,255,255,.25)" },
-    legend: { orientation: "h", y: 1.08, x: 1, xanchor: "right" },
-  }), PLOTLY_CFG);
+      return { xs, ys };
+    };
+    const BIN = 5;
+    const binea = (xs, ys) => {
+      const mapa2 = new Map();
+      xs.forEach((v, i) => {
+        const b = Math.floor(v / BIN) * BIN;
+        if (!mapa2.has(b)) mapa2.set(b, []);
+        mapa2.get(b).push(ys[i]);
+      });
+      return [...mapa2.entries()].map(([v, arr]) => {
+        const s = [...arr].sort((a, b) => a - b);
+        const q = (p) => s[Math.round(p * (s.length - 1))];
+        return { v: v + BIN / 2, med: q(0.5), q25: q(0.25), q75: q(0.75), n: s.length };
+      }).filter((r) => r.n >= 5).sort((a, b) => a.v - b.v);
+    };
+
+    const zonasErs = d.zones || [];
+    const ctlErs = cErs.card.querySelector(".ers-ctl");
+    ctlErs.innerHTML = [
+      `<button class="pill" data-z="-1">TODAS LAS RECTAS</button>`,
+      ...zonasErs.map((z, i) =>
+        `<button class="pill" data-z="${i}">RECTA ${i + 1} · ${z.d0}-${z.d1}m</button>`),
+      `<button class="pill" data-pts="1" style="margin-left:auto">MOSTRAR MUESTRAS</button>`,
+    ].join("");
+
+    const renderErs = () => {
+      const iZona = state.ersZona != null ? state.ersZona : -1;
+      const zona = iZona >= 0 ? zonasErs[iZona] : null;
+      ctlErs.querySelectorAll("[data-z]").forEach((b) =>
+        b.classList.toggle("active", +b.dataset.z === iZona));
+      ctlErs.querySelector("[data-pts]").classList.toggle("active", !!state.ersPts);
+
+      const pilotos = d.drivers
+        .map((x) => { const m3 = muestrasDe(x, zona); return { x, ...m3, bins: binea(m3.xs, m3.ys) }; })
+        .filter((p) => p.bins.length >= 3);
+      let v0 = null, v1 = null;
+      if (pilotos.length) {
+        v0 = Math.max(...pilotos.map((p) => p.bins[0].v));
+        v1 = Math.min(...pilotos.map((p) => p.bins[p.bins.length - 1].v));
+      }
+      const enRango = (p) => p.bins.filter((r) => r.v >= v0 && r.v <= v1);
+
+      const trazas = [];
+      if (state.ersPts) pilotos.forEach((p) => trazas.push({
+        type: "scattergl", mode: "markers", name: p.x.code, showlegend: false,
+        legendgroup: p.x.code, x: p.xs, y: p.ys,
+        marker: { color: rgba(p.x.color, 0.1), size: 2 }, hoverinfo: "skip" }));
+      pilotos.forEach((p) => {
+        const B = enRango(p);
+        if (B.length < 2) return;
+        trazas.push({ type: "scatter", mode: "lines", showlegend: false, legendgroup: p.x.code,
+          x: [...B.map((r) => r.v), ...[...B].reverse().map((r) => r.v)],
+          y: [...B.map((r) => r.q75), ...[...B].reverse().map((r) => r.q25)],
+          fill: "toself", fillcolor: rgba(p.x.color, 0.08),
+          line: { width: 0 }, hoverinfo: "skip" });
+        trazas.push({ type: "scatter", mode: "lines", name: p.x.code, legendgroup: p.x.code,
+          x: B.map((r) => r.v), y: B.map((r) => r.med),
+          line: { color: p.x.color, width: 2.2 },
+          customdata: B.map((r) => [r.n, r.q25.toFixed(1), r.q75.toFixed(1)]),
+          hovertemplate: `<b>${p.x.code}</b> · %{x:.0f} km/h<br>mediana %{y:.1f} m/s² · 50% central %{customdata[1]} a %{customdata[2]}<br>%{customdata[0]} muestras<extra></extra>` });
+      });
+      const anots = pilotos.map((p) => {
+        const B = enRango(p);
+        if (!B.length) return null;
+        const u = B[B.length - 1];
+        return { x: u.v, y: u.med, text: p.x.code, showarrow: false, xanchor: "left",
+                 xshift: 6, font: { size: 10.5, color: p.x.color } };
+      }).filter(Boolean);
+      if (v0 != null && v1 > v0)
+        anots.push({ xref: "paper", yref: "paper", x: 0.99, y: 0.98, xanchor: "right",
+          text: `RANGO COMPARABLE · ${Math.round(v0)}-${Math.round(v1)} KM/H`,
+          showarrow: false, font: { size: 9.5, color: "#77839a" } });
+
+      Plotly.react(cErs.plot, trazas, baseLayout({
+        height: 460, margin: { l: 56, r: 64, t: 16, b: 46 },
+        annotations: anots,
+        xaxis: { ...baseLayout().xaxis, title: { text: "VELOCIDAD (KM/H)", font: { size: 10 } },
+                 showgrid: true, gridcolor: "rgba(255,255,255,.05)", griddash: "dot" },
+        yaxis: { ...baseLayout().yaxis, title: { text: "ACELERACIÓN (M/S²)", font: { size: 10 } },
+                 zeroline: true, zerolinecolor: "rgba(255,255,255,.25)" },
+        legend: { orientation: "h", y: 1.08, x: 1, xanchor: "right" },
+      }), PLOTLY_CFG);
+
+      // tabla 200/250/300 + caída + tiempo estimado 200→300 (solo rango común)
+      const cerca = (p, v) => p.bins.find((r) => Math.abs(r.v - v) <= BIN / 2 + 0.01);
+      const t2030 = (p) => {
+        if (v0 == null || v0 > 200 || v1 < 300) return null;
+        let t = 0;
+        for (let v = 200; v < 300; v += BIN) {
+          const r = p.bins.find((r2) => r2.v === v + BIN / 2);
+          if (!r || r.med < 0.3) return null;
+          t += (BIN / 3.6) / r.med;
+        }
+        return t;
+      };
+      tablaErs.innerHTML = pilotos.length ? `
+        <div class="gg-m-title" style="margin:10px 18px 6px">ENTREGA POR VELOCIDAD · ACELERACIÓN MEDIANA (M/S²)</div>
+        <table style="width:calc(100% - 36px);margin:0 18px 8px"><thead><tr>
+          <th></th><th class="num">200 KM/H</th><th class="num">250 KM/H</th>
+          <th class="num">300 KM/H</th><th class="num">CAÍDA 250→300</th>
+          <th class="num">200→300 ESTIMADO</th></tr></thead>
+        <tbody>${pilotos.map((p) => {
+          const a200 = cerca(p, 200), a250 = cerca(p, 250), a300 = cerca(p, 300);
+          const caida = (a250 && a300) ? a300.med - a250.med : null;
+          const t = t2030(p);
+          return `<tr><td><b style="color:${p.x.color}">${p.x.code}</b></td>
+            <td class="num">${a200 ? a200.med.toFixed(1) : "—"}</td>
+            <td class="num">${a250 ? a250.med.toFixed(1) : "—"}</td>
+            <td class="num">${a300 ? a300.med.toFixed(1) : "—"}</td>
+            <td class="num">${caida != null ? caida.toFixed(1) : "—"}</td>
+            <td class="num">${t != null ? t.toFixed(2) + " s" : "—"}</td></tr>`;
+        }).join("")}</tbody></table>` : "";
+
+      // conclusión calculada, con la prudencia como norma
+      let conc = "";
+      if (pilotos.length >= 2 && v0 != null && v1 > v0) {
+        const finales = pilotos
+          .map((p) => { const B = enRango(p); return { code: p.x.code, r: B[B.length - 1] }; })
+          .filter((f) => f.r);
+        const ord3 = [...finales].sort((a, b) => b.r.med - a.r.med);
+        const separadas = ord3.length >= 2 && ord3[0].r.q25 > ord3[1].r.q75;
+        conc = `En el rango comparable (${Math.round(v0)}-${Math.round(v1)} km/h), ` +
+          (separadas
+            ? `${ord3[0].code} entrega más aceleración a alta velocidad que ${ord3[1].code} y sus bandas NO se traslapan: diferencia real.`
+            : `las bandas de ${ord3[0].code} y ${ord3[1].code} se traslapan a alta velocidad: diferencia no concluyente.`) +
+          ` Ningún recorte de potencia puede confirmarse con una sola vuelta.`;
+      } else if (!pilotos.length) {
+        conc = "Sin muestras suficientes con este filtro (prueba otra recta o TODAS).";
+      }
+      resumenErs.textContent = conc;
+      resumenErs.style.display = conc ? "" : "none";
+    };
+    ctlErs.querySelectorAll("[data-z]").forEach((b) => {
+      b.onclick = () => { state.ersZona = +b.dataset.z; renderErs(); };
+    });
+    ctlErs.querySelector("[data-pts]").onclick = () => {
+      state.ersPts = !state.ersPts; renderErs();
+    };
+    renderErs();
+  }
 
   const cPh = chartCard({
     title: "Fases de conducción", sub: "% del tiempo de la vuelta",
@@ -1708,25 +1851,6 @@ function drawReplay(zone, d) {
 
 /* ───────────────────────────── RITMO DE SESIÓN (estadística de toda la sesión) */
 
-function poly2fit(xs, ys) {
-  // ajuste y = ax² + bx + c por mínimos cuadrados (para la tendencia del ERS)
-  const n = xs.length;
-  if (n < 8) return null;
-  let Sx = 0, Sx2 = 0, Sx3 = 0, Sx4 = 0, Sy = 0, Sxy = 0, Sx2y = 0;
-  for (let i = 0; i < n; i++) {
-    const x = xs[i], y = ys[i], x2 = x * x;
-    Sx += x; Sx2 += x2; Sx3 += x2 * x; Sx4 += x2 * x2;
-    Sy += y; Sxy += x * y; Sx2y += x2 * y;
-  }
-  const A = [[Sx4, Sx3, Sx2], [Sx3, Sx2, Sx], [Sx2, Sx, n]], B = [Sx2y, Sxy, Sy];
-  const det = (m) => m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
-    - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
-    + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
-  const D = det(A);
-  if (!D) return null;
-  const rep = (m, c, v) => m.map((r, i) => r.map((x, j) => (j === c ? v[i] : x)));
-  return [det(rep(A, 0, B)) / D, det(rep(A, 1, B)) / D, det(rep(A, 2, B)) / D];
-}
 
 const COMP_COLORS = { SOFT: "#E0243F", MEDIUM: "#FFC400", HARD: "#E8EAED",
                       INTERMEDIATE: "#2ECC71", WET: "#3F7BF0" };
