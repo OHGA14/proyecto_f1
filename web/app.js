@@ -2028,33 +2028,67 @@ function drawTelCharts(zone, d, Z = null) {
     renderErs();
   }
 
-  const cPh = chartCard({
-    title: "Fases de conducción", sub: "% del tiempo de la vuelta",
-    summary: d.summaries.phases || "",
-    tips: ["<b>¿Más % a fondo?</b> → o el coche permite pisar antes, o el circuito se lo pide y el motor manda.",
-           "<b>¿Más % en curva que el rival?</b> → pasa más tiempo gestionando el paso por curva: ahí se decide su vuelta."],
-  });
-  T.fisica.appendChild(cPh.card);
-  const phSeries = [
-    { key: "fondo", name: "A fondo", color: "#2ECC71" },
-    { key: "frenada", name: "Frenada", color: "#FF5252" },
-    { key: "curva", name: "En curva", color: "#FFC400" },
-  ];
-  Plotly.newPlot(cPh.plot, phSeries.map((s) => ({
-    type: "bar", orientation: "h", name: s.name,
-    y: d.drivers.map((x) => x.code).reverse(),
-    x: d.drivers.map((x) => x.phases[s.key]).reverse(),
-    marker: { color: s.color, line: { color: "#11141b", width: 2 } },
-    text: d.drivers.map((x) => `${x.phases[s.key].toFixed(0)}%`).reverse(),
-    textposition: "inside", textfont: { size: 10.5, color: "#0b0d12" },
-    hovertemplate: `%{y} · ${s.name}: %{x:.1f}%<extra></extra>`,
-  })), baseLayout({
-    height: 300, barmode: "stack",
-    margin: { l: 46, r: 12, t: 12, b: 36 },
-    xaxis: { ...baseLayout().xaxis, ticksuffix: "%" },
-    yaxis: { ...baseLayout().yaxis, gridcolor: "rgba(0,0,0,0)" },
-    legend: { orientation: "h", y: 1.14, x: 0.5, xanchor: "center" },
-  }), PLOTLY_CFG);
+  // ── acciones del piloto: estados EXCLUYENTES ponderados por tiempo real
+  //    ('en curva' era geometría disfrazada de acción: vive en el mapa)
+  {
+    const accionesDe = (x) => {
+      let wF = 0, wP = 0, wC = 0, wB = 0, wT = 0;
+      for (let i = 0; i < x.throttle.length; i++) {
+        const w = 1 / Math.max(x.speed[i], 5);   // dt ∝ Δd/v en malla uniforme
+        const brk = typeof x.brake[i] === "boolean" ? x.brake[i] : x.brake[i] >= 5;
+        wT += w;
+        if (brk) wB += w;
+        else if (x.throttle[i] >= 95) wF += w;
+        else if (x.throttle[i] <= 5) wC += w;
+        else wP += w;
+      }
+      return { fondo: (wF / wT) * 100, parcial: (wP / wT) * 100,
+               coast: (wC / wT) * 100, freno: (wB / wT) * 100 };
+    };
+    const acc = d.drivers.map((x) => ({ x, a: accionesDe(x) }));
+    let sumPh = "";
+    if (acc.length >= 2) {
+      const difs = ["fondo", "parcial", "coast", "freno"].map((k) => ({
+        k, d: acc[1].a[k] - acc[0].a[k] }));
+      const mayor = difs.reduce((a, b) => (Math.abs(b.d) > Math.abs(a.d) ? b : a));
+      const NOM = { fondo: "a fondo", parcial: "gas parcial", coast: "coast", freno: "frenada" };
+      sumPh = Math.abs(mayor.d) < 2
+        ? "Los porcentajes globales son prácticamente iguales; las diferencias importantes hay que buscarlas POR CURVA (mapa de dominancia y entradas del piloto)."
+        : `Mayor diferencia global: ${NOM[mayor.k]} (${acc[1].x.code} ${mayor.d >= 0 ? "+" : ""}${mayor.d.toFixed(1)} pp vs ${acc[0].x.code}). Confírmala por curva antes de concluir estilo.`;
+    }
+    const cPh = chartCard({
+      title: "Acciones del piloto · % del tiempo",
+      sub: "estados excluyentes: frenada / a fondo / gas parcial / coast · ponderado por tiempo · la geometría (curva o recta) vive en el mapa del circuito",
+      summary: sumPh,
+      tips: ["Los cuatro estados SÍ suman 100% porque son excluyentes por definición (freno manda; luego el umbral de gas).",
+             "Diferencias menores a ~2 pp no dan para conclusiones: dependen de umbrales, muestreo y suavizado.",
+             "% DEL TIEMPO ≠ % de la distancia: un piloto más lento pasa más tiempo en las mismas curvas.",
+             "'En curva' no está aquí a propósito: es una condición geométrica, no una acción — se puede ir a fondo EN una curva."],
+    });
+    T.fisica.appendChild(cPh.card);
+    const phSeries = [
+      { key: "fondo", name: "A fondo", color: "#2dd4bf" },
+      { key: "parcial", name: "Gas parcial", color: "#3F7BF0" },
+      { key: "coast", name: "Coast", color: "#6b7280" },
+      { key: "freno", name: "Frenada", color: "#ff6b6b" },
+    ];
+    Plotly.newPlot(cPh.plot, phSeries.map((s) => ({
+      type: "bar", orientation: "h", name: s.name,
+      y: acc.map(({ x }) => x.code).reverse(),
+      x: acc.map(({ a }) => a[s.key]).reverse(),
+      marker: { color: s.color, line: { color: "#11141b", width: 2 } },
+      text: acc.map(({ a }) => a[s.key] >= 6 ? `${a[s.key].toFixed(0)}%` : "").reverse(),
+      textposition: "inside", textfont: { size: 10.5, color: "#0b0d12" },
+      hovertemplate: `%{y} · ${s.name}: %{x:.1f}% del tiempo<extra></extra>`,
+    })), baseLayout({
+      height: chartHeight({ items: acc.length, min: 200, max: 300, per: 34 }),
+      barmode: "stack",
+      margin: { l: 46, r: 12, t: 12, b: 36 },
+      xaxis: { ...baseLayout().xaxis, ticksuffix: "%" },
+      yaxis: { ...baseLayout().yaxis, gridcolor: "rgba(0,0,0,0)" },
+      legend: { orientation: "h", y: 1.16, x: 0.5, xanchor: "center" },
+    }), PLOTLY_CFG);
+  }
 
   T.fisica.appendChild(el(`<div style="height:18px"></div>`));
   sincronizaX(SYNC);
@@ -3608,7 +3642,7 @@ async function viewEquipos() {
     const rot = pred.next_gp ? `Ronda ${pred.next_round} · ${pred.next_gp}` : `Ronda ${pred.next_round}`;
     $view.appendChild(el(`<div class="card" style="margin-bottom:18px">
       <div class="chart-head" style="padding:0 0 6px"><h2>Predicción · ${rot}</h2>
-      <span class="sub">regresión ponderada por recencia + 4,000 carreras simuladas · siempre sobre TODO el campo</span></div>
+      <span class="sub">regresión ponderada por recencia + 4,000 ESCENARIOS DE RITMO (no simula carreras) · siempre sobre TODO el campo</span></div>
       ${(pred.summary || []).map((p) => `<div class="chart-summary ${/^(LÍMITES|OJO)/.test(p) ? "warn" : ""}" style="margin:8px 0 0">${p}</div>`).join("")}
     </div>`));
 
@@ -3617,11 +3651,11 @@ async function viewEquipos() {
 
     // A) ritmo proyectado con margen de error
     const cA = chartCard({
-      title: "Ritmo proyectado + margen de error",
-      sub: "punto = predicción · barra = donde caería 8 de cada 10 veces",
-      tips: ["<b>¿Dos barras se traslapan?</b> → esa pelea NO está decidida; el gap proyectado cabe dentro del ruido.",
+      title: "Ritmo proyectado + intervalo predictivo",
+      sub: "punto = proyección · barra = INTERVALO PREDICTIVO CENTRAL 80% (P10-P90)",
+      tips: ["<b>¿Dos barras se traslapan?</b> → no es prueba formal de empate, pero la pelea no está decidida; la COMPARACIÓN DIRECTA del resumen da la probabilidad exacta.",
              "<b>¿Barra larga?</b> → equipo irregular: el modelo confía poco en él, y por eso mismo puede sorprender.",
-             `0% = el mejor proyectado. En una vuelta de ~${Math.round(pred.pole_med || 85)}s, +0.5% son ~${((pred.pole_med || 85) * 0.005).toFixed(2)}s.`,
+             `0 pp = el mejor proyectado. En una vuelta de ~${Math.round(pred.pole_med || 85)}s, 0.5 pp son ~${((pred.pole_med || 85) * 0.005).toFixed(2)}s.`,
              "El modelo pesa más las últimas carreras (media vida: 3 rondas) y amortigua la tendencia para no sobre-extrapolar."],
     });
     rowP.appendChild(cA.card);
@@ -3647,33 +3681,33 @@ async function viewEquipos() {
 
     // B) probabilidades del Monte Carlo
     const cB = chartCard({
-      title: "Probabilidades · 4,000 carreras simuladas",
-      sub: "barra sólida = ser el más rápido · barra tenue = terminar en el top 3 · solo equipos con ≥1% de opciones",
-      tips: ["Los equipos que no aparecen rondan el 0% de probabilidad en la simulación: mostrarlos solo estira la gráfica.",
-             "Se corren 4,000 carreras sembrando a cada equipo con su ruido REAL (su irregularidad medida) y se cuenta cuántas gana cada uno.",
-             "<b>Probabilidad no es destino:</b> 40% significa que en 6 de cada 10 simulaciones ganó OTRO equipo.",
-             "<b>¿Sólida corta pero tenue larga?</b> → no le da para ganar, pero es candidato firme al podio de ritmo.",
-             "La VALIDACIÓN del resumen mide la honestidad del modelo contra las carreras ya corridas."],
+      title: "Probabilidades · 4,000 escenarios de ritmo",
+      sub: "barra sólida = más rápido EN RITMO · fondo tenue = top 3 de ritmo · bullet: la sólida vive DENTRO de la tenue · solo equipos con ≥1%",
+      tips: ["Son escenarios de RITMO, no carreras: el modelo no conoce lluvia, abandonos ni estrategia.",
+             "Los equipos ausentes rondan el 0%: su probabilidad combinada de ser los más rápidos es <1%.",
+             "P(más rápido) ≤ P(top 3) siempre: por eso la barra sólida vive dentro de la tenue (bullet).",
+             "<b>Probabilidad no es destino:</b> 40% significa que en 6 de cada 10 escenarios el más rápido fue OTRO.",
+             "El error Monte Carlo con 4,000 escenarios es ±1.6 pp como máximo: los enteros mostrados son estables."],
     });
     rowP.appendChild(cB.card);
     // solo equipos con opciones reales (≥1% al top 3): diez barras en 0% no informan
     const tB = pred.teams.filter((t) => t.p_top3 >= 0.01)
       .sort((a, b) => a.p_win - b.p_win || a.p_top3 - b.p_top3);
     Plotly.newPlot(cB.plot, [
-      { type: "bar", orientation: "h", name: "TOP 3",
+      { type: "bar", orientation: "h", name: "TOP 3 DE RITMO", width: 0.62,
         y: tB.map((t) => t.team), x: tB.map((t) => t.p_top3 * 100),
-        marker: { color: tB.map((t) => rgba(t.color, 0.3)), line: { color: "#11141b", width: 1 } },
+        marker: { color: tB.map((t) => rgba(t.color, 0.25)), line: { color: "#11141b", width: 1 } },
         text: tB.map((t) => ` ${(t.p_top3 * 100).toFixed(0)}% `), textposition: "outside",
         textfont: { size: 9.5, color: "#77839a" },
-        hovertemplate: "<b>%{y}</b> · %{x:.0f}% de terminar en el top 3<extra></extra>" },
-      { type: "bar", orientation: "h", name: "MÁS RÁPIDO",
+        hovertemplate: "<b>%{y}</b> · %{x:.0f}% de estar en el top 3 de ritmo<extra></extra>" },
+      { type: "bar", orientation: "h", name: "MÁS RÁPIDO", width: 0.3,
         y: tB.map((t) => t.team), x: tB.map((t) => t.p_win * 100),
-        marker: { color: tB.map((t) => t.color), line: { color: "#11141b", width: 1.5 } },
-        text: tB.map((t) => ` ${(t.p_win * 100).toFixed(0)}% `), textposition: "outside",
-        textfont: { size: 10, color: "#9aa0aa" },
-        hovertemplate: "<b>%{y}</b> · %{x:.0f}% de ser el más rápido<extra></extra>" },
+        marker: { color: tB.map((t) => t.color), line: { color: "#11141b", width: 1 } },
+        text: tB.map((t) => t.p_win >= 0.06 ? `${(t.p_win * 100).toFixed(0)}%` : ""),
+        textposition: "inside", textfont: { size: 10, color: "#0b0d12" },
+        hovertemplate: "<b>%{y}</b> · %{x:.0f}% de ser el más rápido en ritmo<extra></extra>" },
     ], baseLayout({
-      height: Math.max(360, tB.length * 44 + 130), barmode: "group", bargap: 0.25,
+      height: Math.max(360, tB.length * 44 + 130), barmode: "overlay", bargap: 0.2,
       margin: { l: 110, r: 52, t: 14, b: 46 },
       xaxis: { ...baseLayout().xaxis, title: { text: "PROBABILIDAD (%)", font: { size: 10 } },
                range: [0, 106], ticksuffix: "%" },
@@ -3686,8 +3720,8 @@ async function viewEquipos() {
 
   // 1) evolución del déficit al pole
   const c1 = chartCard({
-    title: "Déficit % al pole por equipo",
-    sub: "0% = hizo la pole · comparable entre circuitos",
+    title: "Déficit al pole por equipo (pp)",
+    sub: "0 = hizo la pole · normalizado por tiempo de vuelta; AÚN condicionado por circuito y sesión",
     tips: ["<b>¿Línea que baja?</b> → el equipo se acerca a la referencia: sus mejoras funcionan.",
            "<b>¿Pico aislado?</b> → suele ser efecto circuito o una qualy con lluvia; busca la tendencia, no el punto.",
            "Clic en la leyenda para ocultar equipos; doble clic para aislar uno."],
@@ -3731,89 +3765,77 @@ async function viewEquipos() {
     legend: { orientation: "h", y: -0.24, font: { size: 10.5 } },
   }), PLOTLY_CFG);
 
-  // 3) pendiente de desarrollo + 4) mapa de credibilidad
+  // 3) tendencia estimada: FOREST PLOT con IC 95% (el R² no es credibilidad)
   if (conSlope.length >= 2) {
-    const row = el(`<div class="grid cols-2" style="margin-bottom:20px"></div>`);
-    $view.appendChild(row);
-
-    const c3 = chartCard({
-      title: "Pendiente de desarrollo (β₁)",
-      sub: "cambio del déficit por carrera · negativo = mejora",
-      tips: ["<b>Barra verde hacia la izquierda</b> → recorta % al pole cada carrera.",
-             "Con pocas rondas una barra puede estar dominada por 1-2 fines de semana atípicos: crúzala con el mapa de credibilidad."],
+    const cF = chartCard({
+      title: "Tendencia estimada · pp por ronda",
+      sub: "punto = pendiente · barra = IC 95% · verde = mejora concluyente, rojo = empeora concluyente, gris = el intervalo cruza el cero",
+      tips: ["<b>¿Barra completa a la izquierda del cero?</b> → mejora CONCLUYENTE: hasta el peor caso del intervalo recorta.",
+             "<b>¿La barra cruza el cero?</b> → inconcluso: con ~9 rondas una sola carrera rara mueve la recta; no declares desarrollo.",
+             "La pendiente puede cargar el ORDEN de los circuitos del calendario (no solo desarrollo): una racha de pistas favorables se disfraza de mejora.",
+             "Unidad honesta: puntos porcentuales por ronda (pp/ronda), no '%' multiplicativo."],
     });
-    row.appendChild(c3.card);
-    const ordSlope = [...conSlope].sort((a, b) => b.slope - a.slope);
-    Plotly.newPlot(c3.plot, [{
-      type: "bar", orientation: "h",
-      y: ordSlope.map((t) => t.team), x: ordSlope.map((t) => t.slope),
-      marker: { color: ordSlope.map((t) => t.slope < 0 ? "#2ECC71" : "#FF5252"),
-                line: { color: "#11141b", width: 2 } },
-      text: ordSlope.map((t) => ` ${t.slope > 0 ? "+" : ""}${t.slope.toFixed(3)} `),
-      textposition: "outside", textfont: { size: 10, color: "#9aa0aa" },
-      hovertemplate: "<b>%{y}</b> · %{x:+.4f} %/carrera<extra></extra>",
-    }], baseLayout({
-      height: Math.max(420, ordSlope.length * 34 + 130),
-      margin: { l: 110, r: 60, t: 14, b: 44 },
-      xaxis: { ...baseLayout().xaxis, title: { text: "Δ DÉFICIT % POR CARRERA", font: { size: 10 } },
-               zeroline: true, zerolinecolor: "rgba(255,255,255,.35)" },
-      yaxis: { ...baseLayout().yaxis, gridcolor: "rgba(0,0,0,0)", tickfont: { size: 11 } },
-    }), PLOTLY_CFG);
-
-    const c4 = chartCard({
-      title: "Mapa de credibilidad · pendiente vs R²",
-      sub: "arriba-izquierda = desarrollo real y sostenido",
-      tips: ["<b>Izquierda + arriba (R² alto)</b> → mejora creíble y sostenida.",
-             "<b>Izquierda + abajo</b> → mejora, pero errática: espera más datos.",
-             "<b>Derecha + arriba</b> → declive consistente: foco rojo confirmado.",
-             "<b>Derecha + abajo</b> → probablemente ruido o efecto circuito."],
-    });
-    row.appendChild(c4.card);
-    Plotly.newPlot(c4.plot, [{
-      type: "scatter", mode: "markers+text",
-      x: conSlope.map((t) => t.slope), y: conSlope.map((t) => t.r2),
-      text: conSlope.map((t) => t.team), textposition: "top center",
-      textfont: { size: 10.5, color: conSlope.map((t) => t.color) },
-      marker: { size: 13, color: conSlope.map((t) => t.color),
+    $view.appendChild(cF.card);
+    $view.appendChild(el(`<div style="height:20px"></div>`));
+    const ordF = [...conSlope].sort((a, b) => a.slope - b.slope);
+    const colorF = (t) => {
+      const ci = t.ci || 0;
+      if (t.slope + ci < 0) return "#2ECC71";
+      if (t.slope - ci > 0) return "#FF5252";
+      return "#8a94a4";
+    };
+    Plotly.newPlot(cF.plot, [{
+      type: "scatter", mode: "markers",
+      y: ordF.map((t) => t.team), x: ordF.map((t) => t.slope),
+      error_x: { type: "data", array: ordF.map((t) => t.ci || 0),
+                 color: "rgba(148,163,184,.5)", thickness: 1.6, width: 5 },
+      marker: { size: 10, color: ordF.map(colorF),
                 line: { color: "#11141b", width: 1.5 } },
-      hovertemplate: "<b>%{text}</b><br>β₁ %{x:+.4f} · R² %{y:.2f}<extra></extra>",
+      customdata: ordF.map((t) => [(t.ci || 0).toFixed(3), t.rounds]),
+      hovertemplate: "<b>%{y}</b> · %{x:+.3f} pp/ronda<br>IC 95% ±%{customdata[0]} · %{customdata[1]} rondas<extra></extra>",
+      showlegend: false,
     }], baseLayout({
-      height: Math.max(420, ordSlope.length * 34 + 130), showlegend: false,
-      shapes: [
-        { type: "line", x0: 0, x1: 0, yref: "paper", y0: 0, y1: 1,
-          line: { color: "rgba(255,255,255,.25)", dash: "dash", width: 1 } },
-        { type: "line", xref: "paper", x0: 0, x1: 1, y0: 0.5, y1: 0.5,
-          line: { color: "rgba(255,255,255,.18)", dash: "dot", width: 1 } },
+      height: chartHeight({ items: ordF.length, min: 320, max: 560, per: 36 }),
+      margin: { l: 110, r: 30, t: 26, b: 46 },
+      shapes: [{ type: "line", x0: 0, x1: 0, yref: "paper", y0: 0, y1: 1,
+                 line: { color: "rgba(255,255,255,.3)", dash: "dash", width: 1 } }],
+      annotations: [
+        { xref: "paper", yref: "paper", x: 0.02, y: 1.04, xanchor: "left",
+          text: "← MEJORA", showarrow: false, font: { size: 9.5, color: "#2ECC71" } },
+        { xref: "paper", yref: "paper", x: 0.98, y: 1.04, xanchor: "right",
+          text: "EMPEORA →", showarrow: false, font: { size: 9.5, color: "#FF5252" } },
       ],
-      annotations: [{ xref: "paper", x: 0.99, y: 0.52, text: "umbral de credibilidad",
-                      showarrow: false, font: { size: 9, color: "#6b7280" }, xanchor: "right" }],
-      margin: { l: 56, r: 16, t: 14, b: 46 },
-      xaxis: { ...baseLayout().xaxis, title: { text: "PENDIENTE β₁ (− = MEJORA)", font: { size: 10 } },
+      xaxis: { ...baseLayout().xaxis, title: { text: "PENDIENTE (PP/RONDA) · IC 95%", font: { size: 10 } },
                showgrid: true, gridcolor: "rgba(255,255,255,.05)", griddash: "dot" },
-      yaxis: { ...baseLayout().yaxis, title: { text: "R² DEL AJUSTE", font: { size: 10 } },
-               range: [-0.05, 1.08] },
+      yaxis: { ...baseLayout().yaxis, gridcolor: "rgba(0,0,0,0)", tickfont: { size: 11 } },
     }), PLOTLY_CFG);
   }
 
   // 5) huella de circuito
   if (d.huella && d.huella.teams.length) {
     const cH = chartCard({
-      title: "Huella de circuito",
-      sub: "residuo vs el promedio propio · azul = mejor que su normal, rojo = peor",
-      tips: ["<b>Celda azul intensa aislada</b> → esa pista le sienta al coche (carga, tracción, bumps).",
-             "<b>Columna entera teñida</b> → qualy atípica para todos (lluvia/banderas): ruido de sesión, no efecto circuito.",
-             "Cruza esto con la pendiente: si el 'empeoramiento' de un equipo cae en pistas de un mismo tipo, es efecto circuito, no declive."],
+      title: "Rendimiento inesperado por ronda",
+      sub: "residuo vs su nivel + tendencia (base: déficit a la MEDIANA) · azul = mejor de lo esperado · rojo = peor · solo hover, sin números",
+      tips: ["<b>Celda azul intensa</b> → ese fin de semana rindió por ENCIMA de su expectativa (nivel + evolución ya descontados).",
+             "<b>Columna entera teñida</b> → sesión atípica para todos (lluvia/banderas): ruido de ronda, no circuito.",
+             "Un solo fin de semana NO es afinidad con el circuito: para eso harían falta repeticiones del mismo trazado o características técnicas de las pistas.",
+             "Se resta la tendencia propia: el desarrollo ya no se disfraza de 'circuito' (y el líder ya no es una fila ornamental de ceros)."],
     });
     $view.appendChild(cH.card);
     $view.appendChild(el(`<div style="height:20px"></div>`));
+    const zAbs = d.huella.z.flat().filter((v) => v != null).map(Math.abs)
+      .sort((a, b) => a - b);
+    const zTope = zAbs[Math.floor(0.95 * (zAbs.length - 1))] || 1;
     Plotly.newPlot(cH.plot, [{
       type: "heatmap", x: d.huella.labels, y: d.huella.teams, z: d.huella.z,
-      colorscale: "RdBu", reversescale: true, zmid: 0, xgap: 2, ygap: 3,
-      texttemplate: "%{z:.2f}", textfont: { color: "#ffffff", size: 10 },
-      hovertemplate: "<b>%{y}</b> · %{x}<br>%{z:+.2f}% vs su promedio<extra></extra>",
-      colorbar: { thickness: 12, outlinewidth: 0, tickfont: { size: 10, color: "#9aa0aa" } },
+      colorscale: "RdBu", reversescale: true, zmid: 0,
+      zmin: -zTope, zmax: zTope, xgap: 2, ygap: 3,
+      hovertemplate: "<b>%{y}</b> · %{x}<br>%{z:+.2f} pp vs su expectativa (− = mejor)<extra></extra>",
+      colorbar: { thickness: 12, outlinewidth: 0,
+        title: { text: "PP · − MEJOR", font: { size: 9, color: "#8a94a4" } },
+        tickfont: { size: 10, color: "#9aa0aa" } },
     }], baseLayout({
-      height: Math.max(420, d.huella.teams.length * 44 + 160),
+      height: Math.max(340, d.huella.teams.length * 36 + 150),
       margin: { l: 110, r: 70, t: 14, b: 70 },
       xaxis: { ...baseLayout().xaxis, tickangle: -32, tickfont: { size: 10 } },
       yaxis: { ...baseLayout().yaxis, autorange: "reversed", gridcolor: "rgba(0,0,0,0)",
@@ -3825,26 +3847,33 @@ async function viewEquipos() {
   const row2 = el(`<div class="grid cols-2"></div>`);
   $view.appendChild(row2);
   if (d.conv) {
+    const convVerd = Math.abs(d.conv.slope) > (d.conv.ci || 0)
+      ? "concluyente" : "inconclusa";
     const c6 = chartCard({
-      title: "Convergencia de la parrilla (σ por ronda)",
-      sub: "σ bajando = el campo se aprieta · σ subiendo = alguien se escapa",
-      summary: `Velocidad de convergencia: ${d.conv.slope > 0 ? "+" : ""}${d.conv.slope} puntos de σ por carrera → la parrilla ${d.conv.slope < 0 ? "se APRIETA" : "se ABRE"}.`,
-      tips: ["La línea punteada es la tendencia: su pendiente resume la era reglamentaria en un número.",
-             "<b>¿σ cae?</b> → cada décima de desarrollo mueve más posiciones: la qualy se vuelve lotería de centésimas."],
+      title: "Dispersión del campo completo (σ y MAD por ronda)",
+      sub: "σ = clásica, sensible a rezagados · MAD = robusta · si cuentan historias distintas, 1-2 equipos dominan la 'apertura'",
+      summary: `Tendencia de la dispersión: ${d.conv.slope > 0 ? "+" : ""}${d.conv.slope} pp/ronda (IC 95% ±${(d.conv.ci || 0).toFixed(3)} → ${convVerd}). Se calcula siempre sobre TODO el campo.`,
+      tips: ["La línea punteada es la tendencia de σ; su IC decide si la 'apertura' o el 'apretón' es concluyente o ruido.",
+             "<b>¿σ sube pero MAD no?</b> → uno o dos equipos rezagados dominan la dispersión clásica; el pelotón central no se abrió.",
+             "<b>¿Ambas caen?</b> → el campo se aprieta de verdad: cada décima mueve más posiciones."],
     });
     row2.appendChild(c6.card);
     Plotly.newPlot(c6.plot, [
-      { type: "scatter", mode: "lines+markers", name: "σ del déficit",
+      { type: "scatter", mode: "lines+markers", name: "σ clásica",
         x: d.conv.rounds, y: d.conv.sigma, line: { color: "#5B8FD9", width: 2.2 },
         marker: { size: 7 },
-        hovertemplate: "Ronda %{x}<br>σ = %{y:.3f}%<extra></extra>" },
-      { type: "scatter", mode: "lines", name: "tendencia",
+        hovertemplate: "Ronda %{x}<br>σ = %{y:.3f} pp<extra></extra>" },
+      ...(d.conv.mad ? [{ type: "scatter", mode: "lines+markers", name: "MAD robusta",
+        x: d.conv.rounds, y: d.conv.mad,
+        line: { color: "#2dd4bf", width: 1.8, dash: "dot" }, marker: { size: 5 },
+        hovertemplate: "Ronda %{x}<br>MAD = %{y:.3f} pp<extra></extra>" }] : []),
+      { type: "scatter", mode: "lines", name: "tendencia σ",
         x: d.conv.rounds, y: d.conv.trend,
         line: { color: "#FFC400", width: 2, dash: "dash" }, hoverinfo: "skip" },
     ], baseLayout({
       height: 460, margin: { l: 56, r: 16, t: 14, b: 44 },
       xaxis: { ...baseLayout().xaxis, title: { text: "RONDA", font: { size: 10 } }, dtick: 1 },
-      yaxis: { ...baseLayout().yaxis, title: { text: "σ DEL DÉFICIT (%)", font: { size: 10 } } },
+      yaxis: { ...baseLayout().yaxis, title: { text: "DISPERSIÓN (PP)", font: { size: 10 } } },
       legend: { orientation: "h", y: 1.1, x: 1, xanchor: "right" },
     }), PLOTLY_CFG);
   }

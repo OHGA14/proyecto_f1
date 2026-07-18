@@ -94,7 +94,10 @@ def test_huella_y_resumen(con_teams):
     # residuos de cada equipo suman ~0 (son desvíos de su propio promedio)
     assert sum(out["huella"]["z"][1]) == pytest.approx(0.0, abs=0.05)
     assert any("RITMO" in p for p in out["summary"])
-    assert any("DESARROLLO" in p for p in out["summary"])
+    assert any("TENDENCIA ESTIMADA" in p for p in out["summary"])
+    # la pendiente viene con su IC 95% (nada de R² como 'credibilidad')
+    con_pend = [t for t in out["teams"] if "slope" in t]
+    assert all("ci" in t for t in con_pend)
 
 
 def test_source_race(con_teams):

@@ -678,7 +678,17 @@ def team_evolution(year, source="quali"):
                 ss_res = float(((y - y_hat) ** 2).sum())
                 ss_tot = float(((y - y.mean()) ** 2).sum())
                 r2 = max(0.0, 1 - ss_res / ss_tot) if ss_tot > 0 else 0.0
+                # IC 95% de la pendiente (t de Student): con 9 rondas una sola
+                # carrera rara mueve la recta — el intervalo lo hace visible
+                n_o = len(x)
+                sxx = float(((x - x.mean()) ** 2).sum())
+                se = (float(np.sqrt(max(ss_res, 0.0) / max(n_o - 2, 1) / sxx))
+                      if sxx > 0 and n_o > 2 else 0.0)
+                T95 = {1: 12.71, 2: 4.30, 3: 3.18, 4: 2.78, 5: 2.57,
+                       6: 2.45, 7: 2.36, 8: 2.31, 9: 2.26, 10: 2.23}
+                tcrit = T95.get(n_o - 2, 2.09 if n_o - 2 < 30 else 1.96)
                 item.update(slope=round(float(b1), 4), r2=round(r2, 3),
+                            se=round(se, 4), ci=round(tcrit * se, 4),
                             proy=round(max(0.0, float(b0 + b1 * (max(rlist) + 1))), 3))
             teams.append(item)
 
@@ -686,15 +696,47 @@ def team_evolution(year, source="quali"):
         disp = base.groupby("round")["deficit"].std().dropna()
         conv = None
         if len(disp) >= 3:
-            b1s, b0s = np.polyfit(disp.index.values.astype(float), disp.values, 1)
+            xs_c = disp.index.values.astype(float)
+            b1s, b0s = np.polyfit(xs_c, disp.values, 1)
+            res_c = disp.values - (b0s + b1s * xs_c)
+            sxx_c = float(((xs_c - xs_c.mean()) ** 2).sum())
+            n_c = len(xs_c)
+            se_c = (float(np.sqrt(float((res_c ** 2).sum()) / max(n_c - 2, 1) / sxx_c))
+                    if sxx_c > 0 and n_c > 2 else 0.0)
+            T95c = {1: 12.71, 2: 4.30, 3: 3.18, 4: 2.78, 5: 2.57,
+                    6: 2.45, 7: 2.36, 8: 2.31, 9: 2.26, 10: 2.23}
+            ci_c = T95c.get(n_c - 2, 2.09 if n_c - 2 < 30 else 1.96) * se_c
+            # dispersión ROBUSTA (MAD escalada): si σ y MAD cuentan historias
+            # distintas, uno o dos equipos rezagados dominan la 'apertura'
+            mad = (base.groupby("round")["deficit"]
+                   .apply(lambda s: 1.4826 * float((s - s.median()).abs().median())))
+            mad = mad.reindex(disp.index)
             conv = {"rounds": disp.index.astype(int).tolist(),
                     "sigma": [round(float(v), 3) for v in disp.values],
+                    "mad": [round(float(v), 3) if v == v else None for v in mad.values],
                     "trend": [round(float(b0s + b1s * r), 3) for r in disp.index],
-                    "slope": round(float(b1s), 4)}
+                    "slope": round(float(b1s), 4), "ci": round(ci_c, 4)}
 
-        # huella de circuito: residuo vs el promedio PROPIO del equipo
-        pivote = base.pivot_table(index="team", columns="round", values="deficit")
-        residuos = pivote.sub(pivote.mean(axis=1), axis=0).reindex(orden)
+        # rendimiento inesperado por ronda: residuo del déficit a la MEDIANA
+        # (no a la pole: el líder quedaba clavado en 0 y su fila era ornamental)
+        # menos el ajuste lineal PROPIO (nivel + evolución): si no se resta la
+        # tendencia, el desarrollo se disfraza de 'circuito'
+        pivote = base.pivot_table(index="team", columns="round", values="deficit_med")
+        pivote = pivote.reindex(orden)
+        cols_r = pivote.columns.values.astype(float)
+        filas_res = []
+        for _t in orden:
+            vals = pivote.loc[_t].values.astype(float)
+            m_ok = ~np.isnan(vals)
+            if m_ok.sum() >= 3:
+                b1h, b0h = np.polyfit(cols_r[m_ok], vals[m_ok], 1)
+                filas_res.append(vals - (b0h + b1h * cols_r))
+            elif m_ok.sum() >= 1:
+                filas_res.append(vals - np.nanmean(vals))
+            else:
+                filas_res.append(vals)
+        import pandas as _pd
+        residuos = _pd.DataFrame(filas_res, index=orden, columns=pivote.columns)
         huella = {"teams": orden,
                   "labels": [f"R{r} {labels[rlist.index(r)]}" for r in pivote.columns],
                   "z": [[round(float(v), 2) if v == v else None for v in fila]
@@ -714,28 +756,39 @@ def team_evolution(year, source="quali"):
         resumen = None
         if len(teams) >= 2:
             lider, seg = teams[0], teams[1]
-            partes = [f"RITMO: {lider['team']} manda con {lider['media']:.2f}% de "
-                      f"déficit promedio; {seg['team']} lo persigue ({seg['media']:.2f}%)."]
+
+            def _verd(t):
+                ci_t = t.get("ci") or 0.0
+                return "concluyente" if abs(t["slope"]) > ci_t else "inconclusa"
+            partes = [f"OBSERVADO · RITMO: {lider['team']} tiene el menor déficit "
+                      f"medio ({lider['media']:.2f} pp); {seg['team']} le sigue "
+                      f"({seg['media']:.2f} pp)."]
             if con_pend:
                 mejor = min(con_pend, key=lambda t: t["slope"])
                 peor = max(con_pend, key=lambda t: t["slope"])
-                def cred(r2):
-                    return "tendencia sólida" if r2 >= 0.5 else "tendencia aún ruidosa"
-                partes.append(f"DESARROLLO: {mejor['team']} es quien más recorta "
-                              f"({mejor['slope']:+.3f} %/carrera, R² {mejor['r2']:.2f} → {cred(mejor['r2'])}); "
-                              f"{peor['team']} se rezaga ({peor['slope']:+.3f} %/carrera, "
-                              f"R² {peor['r2']:.2f} → {cred(peor['r2'])}).")
+                partes.append(f"TENDENCIA ESTIMADA: {mejor['team']} "
+                              f"{mejor['slope']:+.3f} pp/ronda "
+                              f"(IC 95% ±{mejor.get('ci', 0):.3f} → {_verd(mejor)}); "
+                              f"{peor['team']} {peor['slope']:+.3f} pp/ronda "
+                              f"(±{peor.get('ci', 0):.3f} → {_verd(peor)}).")
             if conv:
-                partes.append("CONVERGENCIA: la parrilla se está "
-                              + ("APRETANDO" if conv["slope"] < 0 else "ABRIENDO")
-                              + f" ({conv['slope']:+.3f} puntos de σ por carrera).")
+                verd_c = ("concluyente" if abs(conv["slope"]) > (conv.get("ci") or 0)
+                          else "inconclusa")
+                partes.append(f"DISPERSIÓN: la σ entre equipos cambia "
+                              f"{conv['slope']:+.3f} pp/ronda "
+                              f"(IC 95% ±{conv.get('ci', 0):.3f} → tendencia {verd_c}).")
             if mejor_celda:
-                partes.append(f"HUELLA DE CIRCUITO: la más marcada es {mejor_celda['team']} "
-                              f"en {mejor_celda['gp']} ({mejor_celda['val']:+.2f}% vs su promedio).")
+                partes.append(f"RESIDUO DE RONDA: el mayor rendimiento inesperado fue "
+                              f"{mejor_celda['team']} en {mejor_celda['gp']} "
+                              f"({mejor_celda['val']:+.2f} pp vs su expectativa). "
+                              f"Un solo fin de semana no implica afinidad persistente "
+                              f"con el circuito.")
             proys = sorted((t for t in con_pend if "proy" in t), key=lambda t: t["proy"])[:3]
             if proys:
-                partes.append("PROYECCIÓN R" + str(max(rlist) + 1) + " (ingenua): "
-                              + " · ".join(f"{t['team']} {t['proy']:.2f}%" for t in proys) + ".")
+                partes.append("PROYECCIÓN R" + str(max(rlist) + 1) + " (recta simple, "
+                              "baseline): "
+                              + " · ".join(f"{t['team']} {t['proy']:.2f} pp" for t in proys)
+                              + ".")
             resumen = partes
 
         return {"source": source, "rounds": rlist, "labels": labels,
@@ -798,33 +851,58 @@ def team_predict(year, source="quali"):
 
     valid = P.backtesta(series)
 
-    # resumen ejecutivo calculado
+    # P(mejor proyectado más rápido que el segundo): la pregunta deportiva
+    # directa — dos intervalos que se cruzan no son una prueba formal de empate
+    p_dir = None
+    if len(equipos) >= 2:
+        rng2 = np.random.default_rng(11)
+        sa = rng2.normal(equipos[0]["pred"], equipos[0]["sigma"], 4000)
+        sb = rng2.normal(equipos[1]["pred"], equipos[1]["sigma"], 4000)
+        p_dir = float((sa < sb).mean())
+
+    # resumen ejecutivo calculado (escenarios de RITMO: el modelo no simula
+    # carreras — no conoce lluvia, abandonos ni estrategia)
     top = sorted(equipos, key=lambda e: -e["p_win"])[:3]
-    partes = [f"FAVORITO: {top[0]['team']} con {top[0]['p_win']*100:.0f}% de "
-              f"probabilidad de ser el equipo más rápido; lo siguen "
+    partes = [f"MODELO: {top[0]['team']} es el más probable EQUIPO MÁS RÁPIDO "
+              f"EN RITMO ({top[0]['p_win']*100:.0f}% de los escenarios); le siguen "
               f"{top[1]['team']} ({top[1]['p_win']*100:.0f}%) y "
               f"{top[2]['team']} ({top[2]['p_win']*100:.0f}%)."]
     partes.append(f"RITMO PROYECTADO: {equipos[0]['team']} llega con el mejor "
-                  f"ritmo puro; {equipos[1]['team']} a {equipos[1]['gap']:.2f}% "
+                  f"ritmo puro; {equipos[1]['team']} a {equipos[1]['gap']:.2f} pp "
                   f"(≈{equipos[1]['gap_s']:.2f}s por vuelta de {pole_med:.0f}s).")
+    if p_dir is not None:
+        partes.append(f"COMPARACIÓN DIRECTA: P({equipos[0]['team']} más rápido "
+                      f"que {equipos[1]['team']}) = {p_dir*100:.0f}% "
+                      f"(±1.6 pp de error Monte Carlo).")
     if top[0]["team"] != equipos[0]["team"]:
-        partes.append(f"OJO: el favorito por probabilidad ({top[0]['team']}) no es "
-                      f"el más rápido proyectado ({equipos[0]['team']}). No es un error: "
-                      f"{top[0]['team']} es más irregular (σ ±{top[0]['sigma']:.2f}%) y esa "
-                      f"variabilidad le da más boletos en los extremos de la simulación.")
+        partes.append(f"OJO: el más probable ({top[0]['team']}) no es el más "
+                      f"rápido proyectado ({equipos[0]['team']}). No es un error: "
+                      f"{top[0]['team']} es más irregular (σ ±{top[0]['sigma']:.2f} pp) y esa "
+                      f"variabilidad le da más boletos en los extremos de los escenarios.")
     if valid:
+        import math as _m
         mae_s = valid["mae"] * seg_pct
         dif = valid["mae"] - valid["mae_base"]
-        veredicto = ("SÍ le gana" if dif < -0.005
-                     else ("empata" if abs(dif) <= 0.005 else "aún NO le gana"))
-        partes.append(f"VALIDACIÓN: re-jugando la temporada ronda a ronda, el "
-                      f"modelo erró en promedio ±{valid['mae']:.2f}% "
-                      f"(≈{mae_s:.2f}s/vuelta) y acertó el equipo más rápido en "
-                      f"{valid['aciertos']} de {valid['total']} carreras; el baseline "
-                      f"'repetir la última carrera' habría errado ±{valid['mae_base']:.2f}% "
-                      f"→ el modelo {veredicto}.")
-    partes.append("LÍMITES: el modelo solo ve ritmo puro — no sabe de lluvia, "
-                  "abandonos, sanciones ni estrategia. Son probabilidades, no destino.")
+        veredicto = ("mejora al baseline" if dif < -0.005
+                     else ("empata con el baseline" if abs(dif) <= 0.005
+                           else "aún no mejora al baseline"))
+        # IC Wilson 95% de la tasa de acierto: 6/6 NO es 'acierta siempre'
+        z_w, n_w, k_w = 1.96, valid["total"], valid["aciertos"]
+        ph = k_w / n_w
+        den = 1 + z_w * z_w / n_w
+        centro = ph + z_w * z_w / (2 * n_w)
+        rad = z_w * _m.sqrt(ph * (1 - ph) / n_w + z_w * z_w / (4 * n_w * n_w))
+        lo_w, hi_w = (centro - rad) / den, (centro + rad) / den
+        partes.append(f"VALIDACIÓN: re-jugando la temporada ronda a ronda, "
+                      f"MAE {valid['mae']:.2f} pp (≈{mae_s:.2f}s/vuelta) y acertó el "
+                      f"más rápido en {valid['aciertos']} de {valid['total']} backtests "
+                      f"(IC 95% de la tasa: {lo_w*100:.0f}-{hi_w*100:.0f}% — muestra "
+                      f"pequeña); baseline 'repetir la última carrera': "
+                      f"{valid['mae_base']:.2f} pp → el modelo {veredicto} "
+                      f"(diferencia de {abs(dif):.2f} pp, frágil con {valid['total']} rondas).")
+    partes.append("LÍMITES: son 4,000 ESCENARIOS DE RITMO, no carreras — el "
+                  "modelo no conoce lluvia, abandonos, sanciones ni estrategia. "
+                  "Probabilidades, no destino.")
 
     return {"source": source, "year": year, "next_round": next_round,
             "pole_med": round(pole_med, 1), "teams": equipos, "valid": valid,
