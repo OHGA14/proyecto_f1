@@ -284,10 +284,21 @@ async function viewCarrera() {
   $view.appendChild(el(`<div class="section-title">${banderaGP(d.info.gp)} ${d.info.gp} ${d.info.year}
     <small> · ${d.info.date} · ${d.info.n_laps} vueltas · ${d.info.circuit}</small></div>`));
   const podium = d.results.slice(0, 3);
-  $view.appendChild(el(`<div class="podium-hero" style="margin-bottom:18px">${podium.map((p) => `
+  const estratDe = (code) => {
+    const s = (d.strategy || []).find((x) => x.code === code);
+    return s ? s.stints.map((st) => st.compound[0]).join(" → ") : null;
+  };
+  $view.appendChild(el(`<div class="podium-hero" style="margin-bottom:18px">${podium.map((p) => {
+    const dp = p.grid ? p.grid - p.pos : null;
+    const avance = dp == null ? "" : dp > 0 ? ` · +${dp}` : dp < 0 ? ` · ${dp}` : " · =";
+    const estr = estratDe(p.code);
+    return `
     <div class="pod" style="--tc:${p.color}"><span class="pos">P${p.pos}</span>
       <div class="code">${p.code}</div><div class="name">${p.name}</div>
-      <div class="team">${p.team} · mejor vuelta ${p.best_lap}</div></div>`).join("")}</div>`));
+      <div class="team">${p.team}${p.pos === 1 ? " · GANADOR" : ""}</div>
+      <div class="name" style="margin-top:6px;color:var(--ink2)">${p.grid ? `Salida P${p.grid}${avance}` : ""}${estr ? ` · ${estr}` : ""}</div>
+      <div class="team" style="margin-top:4px">mejor vuelta ${p.best_lap}</div></div>`;
+  }).join("")}</div>`));
 
   // chips de pilotos: despejan TODAS las gráficas de la carrera
   const codesR = d.results.map((r) => r.code);
@@ -336,15 +347,23 @@ async function viewCarrera() {
       const bAll = conBest.reduce((a, r) => (r.best_lap_s < a.best_lap_s ? r : a));
       const bSel = selBest.reduce((a, r) => (r.best_lap_s < a.best_lap_s ? r : a));
       sumPace = selC.has(bAll.code)
-        ? `Vuelta más rápida de toda la carrera: ${bAll.best_lap} de ${bAll.code} — está en tu selección.`
-        : `Entre tus seleccionados, la más rápida es ${bSel.best_lap} de ${bSel.code}. La de toda la carrera fue ${bAll.best_lap} de ${bAll.code} (no seleccionado).`;
+        ? `MEJOR VUELTA de toda la carrera: ${bAll.best_lap} de ${bAll.code} — está en tu selección.`
+        : `Entre tus seleccionados, la MEJOR VUELTA es ${bSel.best_lap} de ${bSel.code}; la de toda la carrera fue ${bAll.best_lap} de ${bAll.code} (no seleccionado).`;
+      // la vuelta mínima NO es ritmo sostenido: la mediana responde otra pregunta
+      const medDe = (p) => { const s = [...p.times].sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
+      const conMed = pace.filter((p) => p.times.length >= 5);
+      if (conMed.length) {
+        const mejorMed = conMed.reduce((a, p) => (medDe(p) < medDe(a) ? p : a));
+        sumPace += ` MEJOR RITMO MEDIANO entre seleccionados: ${mejorMed.code} (${fmtLap(medDe(mejorMed))}) — una vuelta mínima no sustituye al ritmo sostenido.`;
+      }
     }
   }
   const c1 = chartCard({
     title: "Ritmo vuelta a vuelta", sub: "pilotos seleccionados · sin vueltas de pits",
     summary: sumPace,
     tips: [
-      "<b>¿Una línea consistentemente abajo?</b> → ese piloto tenía el mejor ritmo de carrera.",
+      "<b>¿Una línea consistentemente abajo?</b> → mejor ritmo APARENTE: el tiempo observado mezcla coche, combustible, goma, tráfico y gestión — compara stints equivalentes antes de concluir.",
+      "Cada stint es una traza separada (color del punto = compuesto); los huecos son vueltas excluidas: no se unen con diagonales.",
       "<b>¿Escalones hacia abajo?</b> → goma nueva tras parar; compáralo con la estrategia.",
       "<b>¿Todos suben a la vez?</b> → coche de seguridad o lluvia.",
     ],
@@ -354,13 +373,37 @@ async function viewCarrera() {
   const tmin = Math.min(...allT), tmax = Math.max(...allT);
   const ticks = [];
   for (let t = Math.ceil(tmin); t <= tmax; t += Math.max(1, Math.round((tmax - tmin) / 5))) ticks.push(t);
-  Plotly.newPlot(c1.plot, pace.map((p) => ({
-    type: "scatter", mode: "lines", name: p.code,
-    x: p.laps, y: p.times, line: { color: p.color, width: 1.7 },
-    hovertemplate: `<b>${p.code}</b> · V%{x}<br>%{customdata}<extra></extra>`,
-    customdata: p.times.map(fmtLap),
-  })), baseLayout({
-    height: 560, margin: { l: 64, r: 16, t: 16, b: 40 },
+  const trazasPace = [];
+  const finPace = [];
+  pace.forEach((p) => {
+    const stintsDe = ((d.strategy || []).find((x) => x.code === p.code) || {}).stints
+      || [{ from: -1e9, to: 1e9, compound: "?", color: p.color }];
+    let primera = true;
+    stintsDe.forEach((st) => {
+      const idx = p.laps.map((l, i) => [l, i]).filter(([l]) => l >= st.from && l <= st.to);
+      if (!idx.length) return;
+      const xsL = [], ysL = [], cdL = [];
+      idx.forEach(([l, i], j) => {
+        if (j && l - idx[j - 1][0] > 1) { xsL.push(null); ysL.push(null); cdL.push(""); }
+        xsL.push(l); ysL.push(p.times[i]); cdL.push(fmtLap(p.times[i]));
+      });
+      trazasPace.push({ type: "scatter", mode: "lines+markers", name: p.code,
+        legendgroup: p.code, showlegend: primera, connectgaps: false,
+        x: xsL, y: ysL,
+        line: { color: p.color, width: 1.6 },
+        marker: { size: 5, color: st.color || p.color, line: { color: "#11141b", width: 1 } },
+        customdata: cdL.map((t2) => [t2, st.compound]),
+        hovertemplate: `<b>${p.code}</b> · V%{x}<br>%{customdata[0]} · %{customdata[1]}<extra></extra>` });
+      primera = false;
+    });
+    if (p.laps.length)
+      finPace.push({ x: p.laps[p.laps.length - 1], y: p.times[p.times.length - 1],
+        text: p.code, showarrow: false, xanchor: "left", xshift: 6,
+        font: { size: 10, color: p.color } });
+  });
+  Plotly.newPlot(c1.plot, trazasPace, baseLayout({
+    height: 470, margin: { l: 64, r: 46, t: 16, b: 40 },
+    annotations: finPace,
     xaxis: { ...baseLayout().xaxis, title: { text: "VUELTA", font: { size: 10 } } },
     yaxis: { ...baseLayout().yaxis, tickvals: ticks, ticktext: ticks.map(fmtLap) },
     legend: { orientation: "h", y: -0.18, font: { size: 10.5 } },
@@ -404,24 +447,41 @@ async function viewCarrera() {
 
   // speed trap
   const c3 = chartCard({
-    title: "Speed trap", sub: "velocidad punta máxima de la carrera (km/h)",
-    tips: ["<b>¿Alto aquí pero lento en la tabla?</b> → coche con poca carga: vuela en recta, sufre en curva."],
+    title: "Speed trap oficial (radar en recta)",
+    sub: "rombo = MÁXIMA de la carrera (una sola muestra) · punto hueco = MEDIANA de sus vueltas (lo repetible) · escala ampliada, no inicia en 0",
+    tips: ["La MÁXIMA es una sola muestra: puede venir de rebufo, aerodinámica activa en modo recta, despliegue eléctrico, viento o una salida mejor — no identifica la causa por sí sola.",
+           "La MEDIANA responde otra pregunta: qué velocidad podía repetir vuelta tras vuelta. Compara las dos.",
+           "<b>¿Máxima alta y mediana baja?</b> → el pico fue circunstancial (rebufo/una vuelta); no concluyas configuración."],
   });
   $view.appendChild(el(`<div style="height:18px"></div>`));
   $view.appendChild(c3.card);
   const st = [...d.speedtrap].reverse();
-  Plotly.newPlot(c3.plot, [{
-    type: "bar", orientation: "h",
-    y: st.map((s) => s.code), x: st.map((s) => s.vmax),
-    marker: { color: st.map((s) => s.color), line: { color: "#11141b", width: 2 } },
-    text: st.map((s) => `${s.vmax.toFixed(0)} `), textposition: "outside",
-    textfont: { color: "#c8cdd6", size: 11 },
-    hovertemplate: "<b>%{y}</b> · %{x:.0f} km/h<extra></extra>",
-  }], baseLayout({
-    height: 320, margin: { l: 52, r: 46, t: 10, b: 36 },
-    xaxis: { ...baseLayout().xaxis, range: [Math.min(...st.map((s) => s.vmax)) - 8,
-             Math.max(...st.map((s) => s.vmax)) + 6] },
+  const xsAll = st.flatMap((s) => [s.vmax, s.vmed].filter((v) => v != null));
+  Plotly.newPlot(c3.plot, [
+    { type: "scatter", mode: "markers", name: "mediana",
+      y: st.map((s) => s.code), x: st.map((s) => s.vmed),
+      marker: { size: 8, color: "rgba(0,0,0,0)", symbol: "circle-open",
+                line: { color: "#8a94a4", width: 1.6 } },
+      customdata: st.map((s) => [s.iqr, s.n]),
+      hovertemplate: "<b>%{y}</b> · mediana %{x:.0f} km/h<br>IQR %{customdata[0]} · %{customdata[1]} vueltas<extra></extra>" },
+    { type: "scatter", mode: "markers+text", name: "máxima",
+      y: st.map((s) => s.code), x: st.map((s) => s.vmax),
+      marker: { size: 10, color: st.map((s) => s.color), symbol: "diamond",
+                line: { color: "#11141b", width: 1.5 } },
+      text: st.map((s) => ` ${s.vmax.toFixed(0)}`), textposition: "middle right",
+      textfont: { size: 10, color: "#c8cdd6" },
+      hovertemplate: "<b>%{y}</b> · máxima %{x:.0f} km/h<extra></extra>" },
+  ], baseLayout({
+    height: chartHeight({ items: st.length, min: 280, max: 520, per: 30 }),
+    margin: { l: 52, r: 56, t: 12, b: 40 },
+    annotations: [{ xref: "paper", yref: "paper", x: 0.005, y: 0.01, xanchor: "left",
+      text: "ESCALA AMPLIADA · EJE NO INICIA EN 0", showarrow: false,
+      font: { size: 8.5, color: "#77839a" } }],
+    xaxis: { ...baseLayout().xaxis, range: [Math.min(...xsAll) - 6, Math.max(...xsAll) + 9],
+             title: { text: "KM/H", font: { size: 10 } } },
     yaxis: { ...baseLayout().yaxis, gridcolor: "rgba(0,0,0,0)" },
+    legend: { orientation: "h", y: 1.1, x: 1, xanchor: "right", font: { size: 10 } },
+    showlegend: true,
   }), PLOTLY_CFG);
 }
 
@@ -491,44 +551,87 @@ async function viewH2H() {
 
   const mas = d.median < 0 ? d.a : d.b;
   const enPista = (d.a.ahead + d.b.ahead) ? (d.a.ahead >= d.b.ahead ? d.a : d.b) : null;
+
+  // test binomial bilateral de la FRECUENCIA: 17-16 en 33 duelos es el
+  // reparto más parejo posible (p=1.00) — frecuencia y magnitud son
+  // historias distintas y se reportan por separado
+  const pBinom = (() => {
+    const n = d.deltas.length, k = d.a.wins;
+    if (!n) return null;
+    const logC = (nn, kk) => {
+      let s = 0;
+      for (let i = 1; i <= kk; i++) s += Math.log(nn - kk + i) - Math.log(i);
+      return s;
+    };
+    const pk = (kk) => Math.exp(logC(n, kk) + n * Math.log(0.5));
+    const pObs = pk(k);
+    let p = 0;
+    for (let kk = 0; kk <= n; kk++) if (pk(kk) <= pObs + 1e-12) p += pk(kk);
+    return Math.min(1, p);
+  })();
+
+  // bootstrap pareado de la MEDIANA normalizada (%) con IC 95%
+  const pctsValidos = (d.pcts || []).filter((p, i) => !(d.outlier && d.outlier[i]));
+  let icMed = null;
+  if (pctsValidos.length >= 8) {
+    const medArr = (a) => { const s = [...a].sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
+    const difs = [];
+    for (let it = 0; it < 5000; it++) {
+      const re = pctsValidos.map(() => pctsValidos[Math.floor(Math.random() * pctsValidos.length)]);
+      difs.push(medArr(re));
+    }
+    difs.sort((x, y) => x - y);
+    icMed = [difs[Math.floor(0.025 * difs.length)], difs[Math.floor(0.975 * difs.length)]];
+  }
+  const medPct = d.med_pct != null ? d.med_pct : 0;
+  const concluyenteMed = icMed && (icMed[0] > 0 === icMed[1] > 0);
+  const nExcl = (d.outlier || []).filter(Boolean).length;
+
   $view.appendChild(el(`<div class="tiles" style="margin-bottom:18px">
-    <div class="card tile" style="--tc:${d.a.color}"><div class="label">${d.a.code} más rápido en</div>
-      <div class="value">${d.a.wins}</div><div class="hint">de ${d.deltas.length} GPs comunes</div></div>
-    <div class="card tile" style="--tc:${mas.color}"><div class="label">Ventaja mediana</div>
-      <div class="value">${Math.abs(d.median).toFixed(3)}s</div>
-      <div class="hint">a favor de ${mas.code} · media ${Math.abs(d.media).toFixed(3)}s sin atípicas</div></div>
-    ${enPista ? `<div class="card tile" style="--tc:${enPista.color}"><div class="label">En pista, delante</div>
+    <div class="card tile" style="--tc:${d.a.color}"><div class="label">Frecuencia · ${d.a.code} vs ${d.b.code}</div>
+      <div class="value">${d.a.wins}–${d.b.wins}</div>
+      <div class="hint">${pBinom != null ? (pBinom > 0.05 ? `sin diferencia estadística (p=${pBinom.toFixed(2)})` : `diferencia significativa (p=${pBinom.toFixed(3)})`) : ""} · ${d.deltas.length} GPs</div></div>
+    <div class="card tile" style="--tc:${mas.color}"><div class="label">Magnitud mediana</div>
+      <div class="value">${Math.abs(medPct).toFixed(2)}%</div>
+      <div class="hint">a favor de ${mas.code} (${Math.abs(d.median).toFixed(3)}s brutos)${icMed ? ` · IC 95% [${icMed[0].toFixed(2)}, ${icMed[1].toFixed(2)}] → ${concluyenteMed ? "concluyente" : "INCONCLUSA"}` : ""}</div></div>
+    ${enPista ? `<div class="card tile" style="--tc:${enPista.color}"><div class="label">Clasificado por delante</div>
       <div class="value">${Math.max(d.a.ahead, d.b.ahead)}–${Math.min(d.a.ahead, d.b.ahead)}</div>
-      <div class="hint">${enPista.code} terminó por delante (carreras comunes)</div></div>` : ""}
-    <div class="card tile" style="--tc:${d.b.color}"><div class="label">${d.b.code} más rápido en</div>
-      <div class="value">${d.b.wins}</div><div class="hint">de ${d.deltas.length} GPs comunes</div></div>
+      <div class="hint">${enPista.code} · influido por DNFs, sanciones y maquinaria</div></div>` : ""}
+    <div class="card tile"><div class="label">Calidad de la muestra</div>
+      <div class="value">${d.deltas.length - nExcl}</div>
+      <div class="hint">GPs válidos para agregados · ${nExcl} atípicos excluidos (|Δ|&gt;2.5s)</div></div>
   </div>`));
 
+  const usaPct = (d.pcts || []).length === d.deltas.length;
   const { card, plot } = chartCard({
-    title: `${d.a.code} vs ${d.b.code} · Δ mejor vuelta por GP`,
-    sub: `abajo = ${d.a.code} más rápido (convención delta)`,
+    title: `${d.a.code} vs ${d.b.code} · Δ ritmo normalizado por GP`,
+    sub: `abajo = ${d.a.code} más rápido · eje en % del tiempo de vuelta (0.5s en 60s ≠ 0.5s en 100s) · segundos en el hover`,
     summary: d.summary,
     tips: [
       `<b>¿Barra hacia abajo?</b> → ${d.a.code} hizo mejor vuelta ese GP (abajo = más rápido, como el delta del dashboard).`,
-      "<b>¿Barras gigantes (&gt;1s)?</b> → lluvia, abandono temprano o safety car; no siempre es ritmo puro.",
-      "<b>¿Patrón por tipo de circuito?</b> → mira si uno domina en urbanos y el otro en circuitos rápidos.",
+      "El eje va en % del tiempo de vuelta: así los circuitos cortos y largos pesan igual. Los segundos brutos viven en el hover.",
+      "<b>¿Barras tenues?</b> → atípicos (|Δ|&gt;2.5s): lluvia, abandono o SC — no entran en los agregados.",
+      "Este duelo mezcla piloto, coche, equipo y condiciones: no mide 'solo manos y pies'.",
     ],
   });
   $view.appendChild(card);
+  const ejeY = usaPct ? d.pcts : d.deltas;
   Plotly.newPlot(plot, [{
-    type: "bar", x: d.gps, y: d.deltas,
-    marker: { color: d.deltas.map((v, i) => {
+    type: "bar", x: d.gps, y: ejeY,
+    marker: { color: ejeY.map((v, i) => {
         const c = v < 0 ? d.a.color : d.b.color;
         return d.outlier && d.outlier[i] ? rgba(c, 0.3) : c;
       }),
       line: { color: "#11141b", width: 2 } },
-    text: d.deltas.map((v) => `${Math.abs(v).toFixed(2)}`), textposition: "outside",
-    textfont: { size: 10, color: "#9aa0aa" },
-    hovertemplate: "%{x}<br>Δ = %{y:+.3f}s (A − B)<extra></extra>",
+    customdata: d.deltas,
+    hovertemplate: usaPct
+      ? "%{x}<br>Δ = %{y:+.3f}% del tiempo de vuelta<br>(%{customdata:+.3f}s brutos)<extra></extra>"
+      : "%{x}<br>Δ = %{y:+.3f}s (A − B)<extra></extra>",
   }], baseLayout({
     height: 430, margin: { l: 58, r: 16, t: 16, b: 86 },
     xaxis: { ...baseLayout().xaxis, tickangle: -38, tickfont: { size: 10 } },
-    yaxis: { ...baseLayout().yaxis, title: { text: "SEGUNDOS (A − B)", font: { size: 10 } },
+    yaxis: { ...baseLayout().yaxis,
+             title: { text: usaPct ? "% DEL TIEMPO DE VUELTA (A − B)" : "SEGUNDOS (A − B)", font: { size: 10 } },
              zeroline: true, zerolinecolor: "rgba(255,255,255,.35)", zerolinewidth: 1 },
   }), PLOTLY_CFG);
 

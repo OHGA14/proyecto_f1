@@ -269,10 +269,16 @@ def session_detail(sid):
                          "total_lost": round(sum(con_dato), 1) if con_dato else None})
 
         vmax = db.query(con, """
-            SELECT driver, MAX(speed_st) AS vmax FROM laps
+            SELECT driver, MAX(speed_st) AS vmax, MEDIAN(speed_st) AS vmed,
+                   quantile_cont(speed_st, 0.25) AS q1,
+                   quantile_cont(speed_st, 0.75) AS q3, COUNT(*) AS n
+            FROM laps
             WHERE session_id=? AND speed_st IS NOT NULL
-            GROUP BY 1 ORDER BY vmax DESC LIMIT 10""", [sid])
+            GROUP BY 1 ORDER BY vmax DESC""", [sid])
         speedtrap = [{"code": r["driver"], "vmax": float(r["vmax"]),
+                      "vmed": round(float(r["vmed"]), 1),
+                      "iqr": round(float(r["q3"] - r["q1"]), 1),
+                      "n": int(r["n"]),
                       "color": colores.get(r["driver"], "#9aa0aa")}
                      for _, r in vmax.iterrows()]
 
@@ -294,16 +300,26 @@ def session_detail(sid):
         if not alldf.empty:
             piv = alldf.pivot_table(index="lap", columns="driver",
                                     values="time_s", aggfunc="first")
+            # cumsum SALTA los NaN (vueltas sin tiempo bajo SC/bandera) y
+            # desplazaba el gap: tras el primer hueco de un piloto su gap deja
+            # de ser confiable → se invalida (la línea se corta, no se inventa)
             cum = piv.cumsum()
+            valido = piv.notna().cumprod().astype(bool)
+            cum = cum.where(valido)
             lider = cum.min(axis=1)
             gapdf = cum.sub(lider, axis=0)
             for d in gapdf.columns:
                 if d not in colores:
                     continue
-                serie = gapdf[d].dropna()
+                serie = gapdf[d]
+                vals = [round(float(v), 2) if v == v else None for v in serie.values]
+                laps_l = serie.index.astype(int).tolist()
+                while vals and vals[-1] is None:
+                    vals.pop(); laps_l.pop()
+                if not any(v is not None for v in vals):
+                    continue
                 gaps.append({"code": d, "color": colores.get(d, "#9aa0aa"),
-                             "laps": serie.index.astype(int).tolist(),
-                             "gap": serie.round(2).tolist()})
+                             "laps": laps_l, "gap": vals})
 
         # vueltas bajo SC/VSC (para sombrear): status contiene 4 (SC) / 6-7 (VSC)
         scdf = db.query(con, """
@@ -447,6 +463,10 @@ def h2h(code_a, code_b, source="race", year=None):
         gps = [f"{r['gp'].replace(' Grand Prix', '')} {str(r['year'])[2:]}"
                for _, r in m.iterrows()]
         deltas = (m["best_s_a"] - m["best_s_b"]).round(3).tolist()
+        # delta NORMALIZADO por duración de vuelta: 0.5s en 60s no es lo mismo
+        # que 0.5s en 100s — el % es comparable entre circuitos
+        pcts = (100 * (m["best_s_a"] - m["best_s_b"]) / m["best_s_b"]).round(3).tolist()
+        anios_gp = m["year"].astype(int).tolist()
         outlier = [abs(d) > 2.5 for d in deltas]   # lluvia/incidente: no es ritmo puro
         col_a = team_color(m.iloc[-1]["team_a"]) or "#FF2D2D"
         col_b = team_color(m.iloc[-1]["team_b"]) or "#5B8FD9"
@@ -455,8 +475,10 @@ def h2h(code_a, code_b, source="race", year=None):
         wins_a = sum(1 for d in deltas if d < 0)
         n = len(deltas)
         limpios = [d for d, o in zip(deltas, outlier) if not o] or deltas
+        limpios_pct = [p for p, o in zip(pcts, outlier) if not o] or pcts
         mediana = float(np.median(limpios))
         media = float(np.mean(limpios))
+        med_pct = float(np.median(limpios_pct))
         mas = code_a if mediana < 0 else code_b
 
         # ── duelo de posiciones (carreras comunes) ─────────────────────────
@@ -500,8 +522,10 @@ def h2h(code_a, code_b, source="race", year=None):
             WHERE s.session IN ('Race','Sprint') AND r.abbr IN (?, ?)
             GROUP BY 1, 2 ORDER BY 1""", [code_a, code_b])
         temporadas = []
-        for year, g in pts.groupby("year"):
-            fila = {"year": int(year), "a": 0.0, "b": 0.0}
+        # OJO: no usar `year` como variable del loop — pisaba el parámetro y
+        # el alcance decía "temporada 2026" con datos de TODAS las temporadas
+        for anio, g in pts.groupby("year"):
+            fila = {"year": int(anio), "a": 0.0, "b": 0.0}
             for _, r in g.iterrows():
                 fila["a" if r["abbr"] == code_a else "b"] = float(r["pts"])
             temporadas.append(fila)
@@ -510,11 +534,16 @@ def h2h(code_a, code_b, source="race", year=None):
         alcance = f"temporada {year}" if year else "todas las temporadas de la base"
         summary = (f"En {n} GPs comunes de {alcance} ({que}): {code_a} más rápido en {wins_a}, "
                    f"{code_b} en {n - wins_a}. Ventaja MEDIANA de {mas}: "
-                   f"{abs(mediana):.3f}s (media {abs(media):.3f}s, sin atípicas). "
-                   + (f"En pista, {code_a if ahead_a >= ahead_b else code_b} terminó "
-                      f"delante {max(ahead_a, ahead_b)}-{min(ahead_a, ahead_b)}."
+                   f"{abs(med_pct):.3f}% del tiempo de vuelta "
+                   f"({abs(mediana):.3f}s brutos, sin atípicas). "
+                   + (f"CLASIFICADO por delante: "
+                      f"{code_a if ahead_a >= ahead_b else code_b} "
+                      f"{max(ahead_a, ahead_b)}-{min(ahead_a, ahead_b)} "
+                      f"(influido por DNFs, sanciones y maquinaria)."
                       if (ahead_a + ahead_b) else ""))
-        return {"gps": gps, "deltas": deltas, "outlier": outlier, "source": source,
+        return {"gps": gps, "deltas": deltas, "pcts": pcts, "anios": anios_gp,
+                "med_pct": round(med_pct, 3),
+                "outlier": outlier, "source": source,
                 "year": year, "alcance": alcance,
                 "a": {"code": code_a, "name": driver_name(code_a), "color": col_a,
                       "wins": wins_a, "ahead": ahead_a},
