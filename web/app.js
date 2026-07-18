@@ -1321,26 +1321,179 @@ function drawTelCharts(zone, d, Z = null) {
   SYNC.push(cGear.plot);
   T.fisica.appendChild(el(`<div class="section-title" id="sec-fis">Física del coche</div>`));
 
-  // FUERZA G LONGITUDINAL vs distancia
+  // ── ACELERACIÓN LONGITUDINAL: zonas de frenada + panel de diferencia
   const cGl = chartCard({
-    title: "Fuerza G longitudinal", sub: "negativo = frenada · " + lapLabels,
-    tips: ["<b>¿Picos hacia abajo de -4/-5G?</b> → las grandes frenadas del circuito; compara qué tan tarde y fuerte frena cada uno.",
-           "<b>¿Meseta positiva suave?</b> → tracción a la salida: ahí se nota el motor y el agarre trasero."],
+    title: "Aceleración longitudinal",
+    sub: "estimada desde la velocidad · −G = desaceleración · +G = aceleración",
+    tips: ["<b>Pico negativo</b> → la desaceleración máxima de esa zona; el valor robusto (percentil 5) está en la tabla.",
+           "<b>Inicio del descenso</b> → dónde empieza a frenar: comparar inicios dice quién frena MÁS TARDE.",
+           "<b>Regreso a cero</b> → suelta el freno; si sube a positivo, ya está traccionando a la salida.",
+           "El panel de abajo es la DIFERENCIA (rival − referencia) alineada por distancia: debajo de cero el rival desacelera más; cerca de cero van iguales.",
+           "Diferencias menores a 0.05 G se consideran similares: esta señal es una derivada estimada, no un acelerómetro."],
   });
   T.fisica.appendChild(cGl.card);
   T.fisica.appendChild(el(`<div style="height:18px"></div>`));
-  Plotly.newPlot(cGl.plot, d.drivers.map((x) => ({
-    type: "scatter", mode: "lines", name: x.code, x: x.d, y: x.glong,
-    line: { color: x.color, width: 1.6 },
-    hovertemplate: `<b>${x.code}</b> · %{y:.2f} G<extra></extra>`,
-  })), baseLayout({
-    height: 340, hovermode: "x unified", shapes: sectorShapes,
-    margin: { l: 50, r: 12, t: 12, b: 44 },
-    xaxis: { ...baseLayout().xaxis, ...cornerAxis },
-    yaxis: { ...baseLayout().yaxis, title: { text: "G LONGITUDINAL", font: { size: 10 } },
-             zeroline: true, zerolinecolor: "rgba(255,255,255,.25)" },
-    legend: { orientation: "h", y: 1.08, x: 1, xanchor: "right" },
-  }), PLOTLY_CFG);
+  {
+    const refG = d.drivers[0];
+    const curvaDe = (dm) => {
+      if (!(d.corners || []).length) return "—";
+      const c = d.corners.reduce((a, c2) => (Math.abs(c2.d - dm) < Math.abs(a.d - dm) ? c2 : a));
+      return "T" + c.n;
+    };
+    // detección de zonas de frenada: sostenida (<-0.25G), fin al volver a -0.15G
+    const zonasDe = (drv, dMin = -Infinity, dMax = Infinity) => {
+      const zs = [];
+      let a = null;
+      for (let i = 0; i < drv.d.length; i++) {
+        const dentro = drv.d[i] >= dMin && drv.d[i] <= dMax;
+        const g = dentro ? drv.glong[i] : 1;
+        if (a == null && g < -0.25) a = i;
+        else if (a != null && g > -0.15) {
+          if (drv.d[i - 1] - drv.d[a] >= 25) zs.push([a, i - 1]);
+          a = null;
+        }
+      }
+      if (a != null && drv.d[drv.d.length - 1] - drv.d[a] >= 25) zs.push([a, drv.d.length - 1]);
+      return zs.map(([i0, i1]) => {
+        const seg = drv.glong.slice(i0, i1 + 1);
+        const ordn = [...seg].sort((x, y) => x - y);
+        const pico = ordn[Math.max(0, Math.floor(0.05 * (ordn.length - 1)))];
+        let dur = 0;
+        for (let i = i0 + 1; i <= i1; i++) {
+          const vm = Math.max(5, (drv.speed[i] + drv.speed[i - 1]) / 2) / 3.6;
+          dur += (drv.d[i] - drv.d[i - 1]) / vm;
+        }
+        const vIni = drv.speed[i0];
+        const vMin = Math.min(...drv.speed.slice(i0, i1 + 1));
+        return { d0: drv.d[i0], d1: drv.d[i1], dPico: drv.d[i0 + seg.indexOf(Math.min(...seg))],
+                 pico, dur, vPerdida: vIni - vMin };
+      });
+    };
+    const zonasRef = zonasDe(refG);
+
+    // por cada zona de la referencia, la frenada de cada piloto en esa ventana
+    const filasZona = [];
+    zonasRef.forEach((z) => {
+      const etiqueta = curvaDe(z.dPico);
+      d.drivers.forEach((drv) => {
+        const zz = drv === refG ? z
+          : (zonasDe(drv, z.d0 - 60, z.d1 + 60)[0] || null);
+        filasZona.push({ zona: etiqueta, code: drv.code, color: drv.color, z: zz });
+      });
+    });
+
+    // diferencia rival − referencia sobre la MISMA cuadrícula de distancia
+    const interpola = (xs, ys, x2) => {
+      let j = 0;
+      return x2.map((v) => {
+        while (j < xs.length - 2 && xs[j + 1] < v) j++;
+        const t2 = Math.max(0, Math.min(1, (v - xs[j]) / ((xs[j + 1] - xs[j]) || 1)));
+        return ys[j] + t2 * (ys[j + 1] - ys[j]);
+      });
+    };
+    const rivales = d.drivers.slice(1).map((drv) => ({
+      code: drv.code, color: drv.color,
+      delta: interpola(drv.d, drv.glong, refG.d).map((g, i) => g - refG.glong[i]),
+    }));
+
+    // resumen calculado con las zonas, no con los píxeles
+    const picos = filasZona.filter((f) => f.z);
+    const mayor = picos.length ? picos.reduce((a, b) => (b.z.pico < a.z.pico ? b : a)) : null;
+    let masTardeTxt = "";
+    if (rivales.length && zonasRef.length) {
+      const rival = d.drivers[1];
+      let tarde = 0, comparadas = 0;
+      zonasRef.forEach((z) => {
+        const zr = zonasDe(rival, z.d0 - 60, z.d1 + 60)[0];
+        if (zr) { comparadas += 1; if (zr.d0 > z.d0 + 3) tarde += 1; }
+      });
+      masTardeTxt = comparadas
+        ? ` ${rival.code} frena más tarde que ${refG.code} en ${tarde} de ${comparadas} zonas.` : "";
+    }
+    let difTxt = "";
+    if (rivales.length) {
+      const difMedia = rivales[0].delta.reduce((a, v) => a + Math.abs(v), 0) / rivales[0].delta.length;
+      difTxt = ` Diferencia media |ΔG|: ${difMedia.toFixed(2)} G → perfiles ${difMedia < 0.05 ? "muy similares" : "con diferencias reales"}.`;
+    }
+    const sumGl = mayor
+      ? `Mayor pico de frenada: ${mayor.code} (${mayor.z.pico.toFixed(1)} G en ${mayor.zona}).` + masTardeTxt + difTxt
+      : "";
+    const resumenGl = el(`<div class="chart-summary" style="display:${sumGl ? "" : "none"}">${sumGl}</div>`);
+    const warnGl = el(`<div class="chart-summary warn">DATO INFERIDO · derivada de la velocidad sobre malla uniforme de distancia, no acelerómetro del coche.</div>`);
+    const tablaGl = el(`<div class="table-wrap">${filasZona.length ? `
+      <div class="gg-m-title" style="margin:10px 18px 6px">ZONAS DE FRENADA · INICIO = QUIÉN FRENA MÁS TARDE · PICO = P5 ROBUSTO</div>
+      <table style="width:calc(100% - 36px);margin:0 18px 8px"><thead><tr>
+        <th>ZONA</th><th>PILOTO</th><th class="num">INICIO (M)</th><th class="num">PICO (G)</th>
+        <th class="num">DURACIÓN (S)</th><th class="num">VEL. PERDIDA</th></tr></thead>
+      <tbody>${filasZona.map((f) => `<tr>
+        <td>${f.zona}</td><td><b style="color:${f.color}">${f.code}</b></td>
+        <td class="num">${f.z ? f.z.d0.toFixed(0) : "—"}</td>
+        <td class="num">${f.z ? f.z.pico.toFixed(2) : "—"}</td>
+        <td class="num">${f.z ? f.z.dur.toFixed(2) : "—"}</td>
+        <td class="num">${f.z ? "−" + f.z.vPerdida.toFixed(0) + " km/h" : "—"}</td></tr>`).join("")}
+      </tbody></table>` : ""}</div>`);
+    const guiaGl = cGl.card.querySelector(".chart-guide");
+    cGl.card.insertBefore(resumenGl, guiaGl);
+    cGl.card.insertBefore(warnGl, guiaGl);
+    cGl.card.insertBefore(tablaGl, guiaGl);
+
+    // gráfica principal: referencia sólida, rivales discontinuos, hover completo
+    const trazasGl = d.drivers.map((x, i) => ({
+      type: "scatter", mode: "lines", name: x.code, x: x.d, y: x.glong,
+      line: { color: x.color, width: i === 0 ? 2.2 : 1.7, dash: i === 0 ? "solid" : "dash" },
+      customdata: x.d.map((dm, k) => [dm, x.speed[k],
+        (typeof x.brake[k] === "boolean" ? x.brake[k] : x.brake[k] >= 5) ? "sí" : "no",
+        x.throttle[k], x.gear[k]]),
+      hovertemplate: `<b>${x.code}</b> · %{customdata[0]:.0f} m<br>` +
+        "%{y:+.2f} G · %{customdata[1]:.0f} km/h<br>" +
+        "freno %{customdata[2]} · gas %{customdata[3]:.0f}% · %{customdata[4]}ª<extra></extra>",
+    }));
+    const finales = d.drivers.map((x) => ({
+      x: x.d[x.d.length - 1], y: x.glong[x.glong.length - 1], text: x.code,
+      showarrow: false, xanchor: "left", xshift: 5,
+      font: { size: 10, color: x.color } }));
+    Plotly.newPlot(cGl.plot, trazasGl, baseLayout({
+      height: 340, hovermode: "x unified", shapes: [
+        ...sectorShapes,
+        { type: "rect", xref: "paper", x0: 0, x1: 1, y0: 0, y1: 8, layer: "below",
+          fillcolor: "rgba(56,189,248,.025)", line: { width: 0 } },
+        { type: "rect", xref: "paper", x0: 0, x1: 1, y0: -8, y1: 0, layer: "below",
+          fillcolor: "rgba(224,36,63,.03)", line: { width: 0 } },
+      ],
+      margin: { l: 50, r: 46, t: 30, b: 44 },
+      annotations: [...sectorAnnots, ...finales,
+        ...(d.corners || []).map((c) => ({ x: c.d, yref: "paper", y: 1.01,
+          text: String(c.n), showarrow: false,
+          font: { size: 8, color: "#5f6b7d" } }))],
+      xaxis: { ...baseLayout().xaxis, title: { text: "DISTANCIA DE VUELTA (M) · arriba: curvas", font: { size: 10 } } },
+      yaxis: { ...baseLayout().yaxis, title: { text: "ACELERACIÓN LONGITUDINAL (G)", font: { size: 10 } },
+               zeroline: true, zerolinecolor: "rgba(255,255,255,.25)" },
+      legend: { orientation: "h", y: 1.12, x: 1, xanchor: "right" },
+    }), PLOTLY_CFG);
+
+    // panel de diferencia ΔG (rival − referencia), misma cuadrícula y zoom
+    if (rivales.length) {
+      const plotDif = el(`<div></div>`);
+      cGl.card.querySelector(".chart-body").appendChild(plotDif);
+      Plotly.newPlot(plotDif, rivales.map((r) => ({
+        type: "scatter", mode: "lines", name: `Δ ${r.code}`,
+        x: refG.d, y: r.delta,
+        line: { color: r.color, width: 1.6 },
+        hovertemplate: `<b>Δ ${r.code} − ${refG.code}</b> · %{y:+.2f} G<extra></extra>`,
+      })), baseLayout({
+        height: 180, hovermode: "x unified", shapes: sectorShapes,
+        margin: { l: 50, r: 46, t: 6, b: 34 },
+        annotations: [{ xref: "paper", yref: "paper", x: 0.005, y: 0.95, xanchor: "left",
+          text: `DIFERENCIA vs ${refG.code} · abajo = desacelera más que la referencia`,
+          showarrow: false, font: { size: 9, color: "#77839a" } }],
+        xaxis: { ...baseLayout().xaxis, showticklabels: false },
+        yaxis: { ...baseLayout().yaxis, title: { text: "ΔG", font: { size: 9 } },
+                 zeroline: true, zerolinecolor: "rgba(255,255,255,.3)" },
+        showlegend: false,
+      }), PLOTLY_CFG);
+      SYNC.push(plotDif);
+    }
+  }
 
   // ── ENTREGA LONGITUDINAL EN RECTA: proxy honesto (ex-"ERS")
   //    mediana por bloques de 5 km/h + banda Q25-Q75, rango comparable,
