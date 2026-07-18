@@ -1211,24 +1211,67 @@ function drawTelCharts(zone, d, Z = null) {
     if (d.micro) {
     const m = d.micro;
     const colorDe = (k) => (d.drivers.find((x) => x.code === k) || {}).color || "#ddd";
-    const lbls = `<div class="ms-col-lbl"><div class="ms-head">&nbsp;</div>${m.keys.map((k) =>
-      `<div class="ms-lbl" style="color:${colorDe(k)}">${k}</div>`).join("")}</div>`;
-    const secs = m.sectors.map((sc) => {
-      const rows = m.keys.map((k) => `<div class="ms-row">${sc.cells.map((c) =>
-        `<span class="ms-cell ms-${c.colors[k]}" title="${k}: +${c.gaps[k].toFixed(3)}s vs el mejor del tramo"></span>`).join("")}</div>`).join("");
-      return `<div class="ms-sector"><div class="ms-head"><b>${sc.label}</b>
-        <span>gana ${sc.winner} +${sc.margin.toFixed(3)}s</span></div>${rows}</div>`;
-    }).join("");
-    T.telemetria.appendChild(el(`<div class="card chart-card" style="margin-bottom:18px">
-      <div class="chart-head"><h2>Micro-sectores</h2>
-        <span class="sub">morado = más rápido · verde = empate (&lt;0.02s) · amarillo = más lento</span></div>
-      <div style="padding:8px 18px 2px"><div class="ms-wrap">${lbls}${secs}</div></div>
-      ${d.summaries.micro ? `<div class="chart-summary">${d.summaries.micro}</div>` : ""}
-      <details class="chart-guide"><summary>¿Cómo leer esta gráfica?</summary><ul>
-        <li><b>¿Una fila casi toda morada en un sector?</b> → ahí vive su ventaja; ve a ese tramo en la gráfica de velocidad.</li>
-        <li><b>¿Mucho verde?</b> → van empatados; la vuelta se decide en los pocos tramos con color.</li>
-        <li>Pasa el cursor sobre una celda para ver el tiempo exacto perdido en ese tramo.</li>
-      </ul></details></div>`));
+    if (m.keys.length === 2) {
+      // DOS pilotos: una sola franja — color = ganador, intensidad = magnitud,
+      // gris = inconcluso (<10 ms). Cobertura e impacto por separado.
+      const [ka, kb] = m.keys;
+      let total = 0, ganaA = 0, ganaB = 0, inconc = 0, mayor = null;
+      const filas = m.sectors.map((sc) => {
+        const celdas = sc.cells.map((c, j) => {
+          const dj = (c.gaps[ka] || 0) - (c.gaps[kb] || 0);   // >0: gana kb
+          total += dj;
+          const mag = Math.abs(dj);
+          let bg = "rgba(107,114,128,.22)";
+          let titulo = `diferencia ${(mag * 1000).toFixed(0)} ms · inconclusa`;
+          if (mag >= 0.010) {
+            const quien = dj > 0 ? kb : ka;
+            bg = rgba(colorDe(quien), mag >= 0.05 ? 0.85 : 0.38);
+            titulo = `${quien} gana ${(mag * 1000).toFixed(0)} ms`;
+            if (dj > 0) ganaB++; else ganaA++;
+            if (!mayor || mag > mayor.mag) mayor = { mag, quien, sector: sc.label, j: j + 1 };
+          } else inconc++;
+          return `<span class="ms-cell" style="background:${bg}"
+            title="${sc.label} · tramo ${j + 1}: ${titulo}"></span>`;
+        }).join("");
+        return `<div class="ms-sector"><div class="ms-head"><b>${sc.label}</b>
+          <span>gana ${sc.winner} +${sc.margin.toFixed(3)}s</span></div>
+          <div class="ms-row">${celdas}</div></div>`;
+      }).join("");
+      const quienTotal = total > 0 ? kb : ka;
+      T.telemetria.appendChild(el(`<div class="card chart-card" style="margin-bottom:18px">
+        <div class="chart-head"><div class="chart-head-row"><h2>Micro-sectores</h2></div>
+          <span class="sub">color = quién ganó el tramo · intensidad = magnitud (tenue 10-50 ms, intensa >50 ms) · gris = inconcluso (&lt;10 ms)</span></div>
+        <div style="padding:8px 18px 2px"><div class="ms-wrap">${filas}</div></div>
+        <div class="chart-summary">IMPACTO: ${quienTotal} gana ${Math.abs(total).toFixed(3)}s en total.
+          COBERTURA: ${ka} ${ganaA} tramos · ${kb} ${ganaB} · ${inconc} inconclusos.${mayor
+          ? ` MAYOR GANANCIA: ${mayor.quien} en ${mayor.sector}, tramo ${mayor.j} (${(mayor.mag * 1000).toFixed(0)} ms).` : ""}
+          Cobertura e impacto son cosas distintas: se puede ganar más tramos y menos tiempo.</div>
+        <details class="chart-guide"><summary>¿Cómo leer esta gráfica?</summary><ul>
+          <li><b>¿Celda intensa?</b> → ventaja mayor a 50 ms: ahí vive la diferencia real; búscala en el perfil de velocidad.</li>
+          <li><b>¿Celda gris?</b> → menos de 10 ms: dentro del error de la telemetría, no concluyas nada con ella.</li>
+          <li>La suma de todos los tramos cierra con la diferencia de vuelta (tiempos calibrados a los oficiales).</li>
+          <li>Pasa el cursor por una celda para el detalle exacto.</li>
+        </ul></details></div>`));
+    } else {
+      const lbls = `<div class="ms-col-lbl"><div class="ms-head">&nbsp;</div>${m.keys.map((k) =>
+        `<div class="ms-lbl" style="color:${colorDe(k)}">${k}</div>`).join("")}</div>`;
+      const secs = m.sectors.map((sc) => {
+        const rows = m.keys.map((k) => `<div class="ms-row">${sc.cells.map((c) =>
+          `<span class="ms-cell ms-${c.colors[k]}" title="${k}: +${c.gaps[k].toFixed(3)}s vs el mejor del tramo"></span>`).join("")}</div>`).join("");
+        return `<div class="ms-sector"><div class="ms-head"><b>${sc.label}</b>
+          <span>gana ${sc.winner} +${sc.margin.toFixed(3)}s</span></div>${rows}</div>`;
+      }).join("");
+      T.telemetria.appendChild(el(`<div class="card chart-card" style="margin-bottom:18px">
+        <div class="chart-head"><div class="chart-head-row"><h2>Micro-sectores</h2></div>
+          <span class="sub">morado = más rápido · verde = empate (&lt;0.02s) · amarillo = más lento</span></div>
+        <div style="padding:8px 18px 2px"><div class="ms-wrap">${lbls}${secs}</div></div>
+        ${d.summaries.micro ? `<div class="chart-summary">${d.summaries.micro}</div>` : ""}
+        <details class="chart-guide"><summary>¿Cómo leer esta gráfica?</summary><ul>
+          <li><b>¿Una fila casi toda morada en un sector?</b> → ahí vive su ventaja; ve a ese tramo en la gráfica de velocidad.</li>
+          <li><b>¿Mucho verde?</b> → van empatados; la vuelta se decide en los pocos tramos con color.</li>
+          <li>Pasa el cursor sobre una celda para ver el tiempo exacto perdido en ese tramo.</li>
+        </ul></details></div>`));
+    }
   }
 
   // ── PERFIL DE VELOCIDAD + franja Δv + VENTAJA ACUMULADA (cierra con oficiales)
@@ -1397,52 +1440,121 @@ function drawTelCharts(zone, d, Z = null) {
     T.telemetria.appendChild(el(`<div style="height:18px"></div>`));
   }
 
-  // canales a ANCHO COMPLETO (aquí se ven las diferencias finas)
-  const mkChannel = (title, key, ytitle, tips, summary) => {
-    const c = chartCard({ title, sub: "vs distancia · " + lapLabels, tips, summary });
-    T.telemetria.appendChild(c.card);
+  // ── ENTRADAS DEL PILOTO: acelerador + estado de freno + marcha, UN panel
+  {
+    // métricas por DISTANCIA (la malla es uniforme de ~5 m y se declara)
+    const met = d.drivers.map((x) => {
+      const n = x.throttle.length;
+      let fondo = 0, lift = 0, frenando = 0, cambios = 0;
+      for (let i = 0; i < n; i++) {
+        const bOn = typeof x.brake[i] === "boolean" ? x.brake[i] : x.brake[i] >= 5;
+        if (x.throttle[i] >= 99) fondo++;
+        if (x.throttle[i] < 95 && !bOn) lift++;
+        if (bOn) frenando++;
+        if (i && x.gear[i] !== x.gear[i - 1]) cambios++;
+      }
+      const paso = x.d[x.d.length - 1] / n;
+      return { code: x.code, fondoPct: (fondo / n) * 100, frenPct: (frenando / n) * 100,
+               liftM: lift * paso, cambios };
+    });
+    const sumIn = met.map((m2) =>
+      `${m2.code}: ${m2.fondoPct.toFixed(1)}% a fondo · frena en ${m2.frenPct.toFixed(1)}% · levanta sin frenar ${m2.liftM.toFixed(0)} m · ${m2.cambios} cambios`)
+      .join("  —  ") + " (todo por distancia).";
+    const cIn = chartCard({
+      title: "Entradas del piloto",
+      sub: "acelerador · estado de frenado · marcha — mismo eje de distancia, cursor y zoom compartidos",
+      summary: sumIn,
+      tips: ["El acelerador es la ORDEN del piloto, no el rendimiento: un promedio menor puede ser una vuelta mejor. Compáralo con velocidad y ventaja acumulada.",
+             "<b>El freno de esta fuente es BINARIO</b> (activo/inactivo): dice CUÁNDO frena, no cuánta presión aplica. La intensidad vive en la gráfica de aceleración longitudinal (FÍSICA).",
+             "<b>¿Dos activaciones de freno seguidas?</b> → chicane, liberación intermedia o corrección: confirma con velocidad y G longitudinal antes de concluir.",
+             "Una marcha distinta en la misma curva no implica más velocidad por sí sola: pueden variar relaciones de caja, régimen o gestión.",
+             "Los porcentajes se miden POR DISTANCIA (malla uniforme de ~5 m), no por tiempo."],
+    });
+    T.telemetria.appendChild(cIn.card);
     T.telemetria.appendChild(el(`<div style="height:18px"></div>`));
-    Plotly.newPlot(c.plot, d.drivers.map((x) => ({
-      type: "scatter", mode: "lines", name: x.code, x: x.d, y: x[key],
-      line: { color: x.color, width: 1.6 },
-      hovertemplate: `<b>${x.code}</b> · %{y:.0f}${key === "gear" ? "ª" : "%"}<extra></extra>`,
+    const cuerpoIn = cIn.card.querySelector(".chart-body");
+    const pThr = cIn.plot;
+    const pBrk = el(`<div></div>`); cuerpoIn.appendChild(pBrk);
+    const pGear = el(`<div></div>`); cuerpoIn.appendChild(pGear);
+
+    // 1) acelerador
+    Plotly.newPlot(pThr, d.drivers.map((x, i) => ({
+      type: "scatter", mode: "lines", name: x.code, x: x.d, y: x.throttle,
+      line: { color: x.color, width: 1.6, dash: DASHES[i % DASHES.length] },
+      hovertemplate: `<b>${x.code}</b> · gas %{y:.0f}%<extra></extra>`,
     })), baseLayout({
-      height: 260, hovermode: "x unified", shapes: sectorShapes,
-      margin: { l: 50, r: 12, t: 12, b: 44 },
-      xaxis: { ...baseLayout().xaxis, ...cornerAxis },
-      yaxis: { ...baseLayout().yaxis, title: { text: ytitle, font: { size: 10 } } },
-      legend: { orientation: "h", y: 1.08, x: 1, xanchor: "right" },
+      height: 210, hovermode: "x unified", shapes: sectorShapes,
+      margin: { l: 52, r: 12, t: 22, b: 6 },
+      annotations: [...sectorAnnots],
+      xaxis: { ...baseLayout().xaxis, showticklabels: false },
+      yaxis: { ...baseLayout().yaxis, title: { text: "% PEDAL", font: { size: 9.5 } } },
+      legend: { orientation: "h", y: 1.24, x: 1, xanchor: "right", font: { size: 10 } },
     }), PLOTLY_CFG);
-    SYNC.push(c.plot);
-  };
-  mkChannel("Acelerador", "throttle", "% GAS",
-    ["<b>¿Pisa a fondo antes que el otro a la salida de una curva?</b> → mejor tracción o más confianza; ahí nace la ventaja de la recta siguiente."],
-    d.summaries.throttle || "");
-  mkChannel("Freno", "brake", "% FRENO",
-    ["<b>¿Su frenada empieza más tarde (más a la derecha)?</b> → frena más profundo: típico punto de adelantamiento.",
-     "<b>¿Dos picos seguidos?</b> → soltó y volvió a frenar (corrección o chicane)."],
-    d.summaries.brake || "");
+    SYNC.push(pThr);
 
-  // marchas y fases a ancho completo
-  const cGear = chartCard({
-    title: "Marchas", sub: "vs distancia",
-    tips: ["<b>¿Cambia una marcha menos en la misma curva?</b> → relación más larga o toma la curva con más velocidad."],
-  });
-  T.telemetria.appendChild(cGear.card);
-  T.telemetria.appendChild(el(`<div style="height:18px"></div>`));
-  Plotly.newPlot(cGear.plot, d.drivers.map((x) => ({
-    type: "scatter", mode: "lines", name: x.code, x: x.d, y: x.gear,
-    line: { color: x.color, width: 1.6, shape: "hv" },
-    hovertemplate: `<b>${x.code}</b> · %{y}ª<extra></extra>`,
-  })), baseLayout({
-    height: 260, hovermode: "x unified", shapes: sectorShapes,
-    margin: { l: 50, r: 12, t: 12, b: 44 },
-    xaxis: { ...baseLayout().xaxis, ...cornerAxis },
-    yaxis: { ...baseLayout().yaxis, title: { text: "MARCHA", font: { size: 10 } }, dtick: 1 },
-    legend: { orientation: "h", y: 1.08, x: 1, xanchor: "right" },
-  }), PLOTLY_CFG);
+    // 2) freno como CARRILES on/off: dos estados no necesitan 100 unidades de eje
+    const codesIn = d.drivers.map((x) => x.code);
+    Plotly.newPlot(pBrk, d.drivers.map((x) => {
+      const ys = [];
+      for (let i = 0; i < x.d.length; i++) {
+        const on = typeof x.brake[i] === "boolean" ? x.brake[i] : x.brake[i] >= 5;
+        ys.push(on ? x.code : null);
+      }
+      return { type: "scatter", mode: "lines", name: x.code, x: x.d, y: ys,
+        connectgaps: false, showlegend: false,
+        line: { color: x.color, width: 12 },
+        hovertemplate: `<b>${x.code}</b> · frenando<extra></extra>` };
+    }), baseLayout({
+      height: 56 + d.drivers.length * 30, hovermode: "closest", shapes: sectorShapes,
+      margin: { l: 52, r: 12, t: 8, b: 6 },
+      xaxis: { ...baseLayout().xaxis, showticklabels: false },
+      yaxis: { ...baseLayout().yaxis, type: "category",
+               categoryorder: "array", categoryarray: [...codesIn].reverse(),
+               gridcolor: "rgba(0,0,0,0)", tickfont: { size: 10 } },
+      showlegend: false,
+    }), PLOTLY_CFG);
+    SYNC.push(pBrk);
 
-  SYNC.push(cGear.plot);
+    // 3) marchas + diferencias SOSTENIDAS anotadas (≥20 m, solo con 2 pilotos)
+    const anotG = [];
+    if (d.drivers.length === 2) {
+      const [a, b] = d.drivers;
+      const gB = interpLin(b.d.map((v) => v / b.d[b.d.length - 1]), b.gear,
+                           a.d.map((v) => v / a.d[a.d.length - 1]));
+      let iniG = null;
+      const zonasDif = [];
+      for (let i = 0; i < a.d.length; i++) {
+        const dif = Math.round(gB[i]) !== a.gear[i];
+        if (dif && iniG == null) iniG = i;
+        else if (!dif && iniG != null) {
+          if (a.d[i - 1] - a.d[iniG] >= 20) zonasDif.push([iniG, i - 1]);
+          iniG = null;
+        }
+      }
+      zonasDif.sort((z1, z2) => (a.d[z2[1]] - a.d[z2[0]]) - (a.d[z1[1]] - a.d[z1[0]]));
+      zonasDif.slice(0, 4).forEach(([i0, i1]) => {
+        const mid = (a.d[i0] + a.d[i1]) / 2;
+        const c2 = (d.corners || []).length
+          ? d.corners.reduce((p, q) => (Math.abs(q.d - mid) < Math.abs(p.d - mid) ? q : p)) : null;
+        anotG.push({ x: mid, yref: "paper", y: 1.07, showarrow: false,
+          text: `${c2 ? "T" + c2.n + ": " : ""}${a.code} ${a.gear[i0]}ª · ${b.code} ${Math.round(gB[i0])}ª`,
+          font: { size: 8.5, color: "#8a919e" } });
+      });
+    }
+    Plotly.newPlot(pGear, d.drivers.map((x) => ({
+      type: "scatter", mode: "lines", name: x.code, x: x.d, y: x.gear,
+      line: { color: x.color, width: 1.6, shape: "hv" },
+      hovertemplate: `<b>${x.code}</b> · %{y}ª<extra></extra>`,
+    })), baseLayout({
+      height: 190, hovermode: "x unified", shapes: sectorShapes,
+      margin: { l: 52, r: 12, t: 20, b: 40 },
+      annotations: anotG,
+      xaxis: { ...baseLayout().xaxis, title: { text: "DISTANCIA DE VUELTA (M)", font: { size: 10 } } },
+      yaxis: { ...baseLayout().yaxis, title: { text: "MARCHA", font: { size: 9.5 } }, dtick: 1 },
+      showlegend: false,
+    }), PLOTLY_CFG);
+    SYNC.push(pGear);
+  }
   T.fisica.appendChild(el(`<div class="section-title" id="sec-fis">Física del coche</div>`));
 
   // ── ACELERACIÓN LONGITUDINAL: zonas de frenada + panel de diferencia
