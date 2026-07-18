@@ -35,25 +35,39 @@ const accLine = (a = 0.5) => `rgba(${cssVar("--red-rgb") || "255,45,45"},${a})`;
 const baseLayout = (extra = {}) => ({
   paper_bgcolor: "rgba(0,0,0,0)",
   plot_bgcolor: "rgba(0,0,0,0)",
-  font: { family: cssVar("--font-chart") || "Inter, sans-serif", color: "#c8cdd6", size: 12 },
+  font: { family: cssVar("--font-chart") || "Inter, sans-serif", color: "#ced3dc", size: 12.5 },
   margin: { l: 58, r: 70, t: 16, b: 44 },
-  xaxis: { showgrid: false, zeroline: false, color: "#9aa0aa" },
-  yaxis: { gridcolor: "rgba(255,255,255,.06)", griddash: "dot", zeroline: false, color: "#9aa0aa" },
-  hoverlabel: { bgcolor: "#1a1e27", bordercolor: "#3a3d47", font: { color: "#f3f4f6", size: 12 } },
+  xaxis: { showgrid: false, zeroline: false, color: "#aeb5c0" },
+  yaxis: { gridcolor: "rgba(255,255,255,.06)", griddash: "dot", zeroline: false, color: "#aeb5c0" },
+  hoverlabel: { bgcolor: "#1a1e27", bordercolor: "#3a3d47", font: { color: "#f3f4f6", size: 12.5 } },
   ...extra,
 });
 
 /* Tarjeta de gráfica con la firma de la casa: resumen calculado + guía tip. */
 function chartCard({ title, sub = "", summary = "", tips = [], legendHtml = "" }) {
   const card = el(`<div class="card chart-card">
-    <div class="chart-head"><h2>${title}</h2><span class="sub">${sub}</span></div>
+    <div class="chart-head">
+      <div class="chart-head-row"><h2>${title}</h2>
+        ${tips.length ? `<button class="guide-btn" title="Abrir la guía de lectura">ⓘ CÓMO LEERLA</button>` : ""}</div>
+      ${sub ? `<span class="sub">${sub}</span>` : ""}
+    </div>
     <div class="chart-body"><div class="plot"></div></div>
     ${legendHtml}
     ${summary ? `<div class="chart-summary">${summary}</div>` : ""}
-    ${tips.length ? `<details class="chart-guide"><summary>¿Cómo leer esta gráfica?</summary>
-      <ul>${tips.map((t) => `<li>${t}</li>`).join("")}</ul></details>` : ""}
+    ${tips.length ? `<div class="chart-guide" hidden>
+      <ul>${tips.map((t) => `<li>${t}</li>`).join("")}</ul></div>` : ""}
   </div>`);
+  if (tips.length) {
+    const btn = card.querySelector(".guide-btn");
+    const guia = card.querySelector(".chart-guide");
+    btn.onclick = () => { guia.hidden = !guia.hidden; btn.classList.toggle("on", !guia.hidden); };
+  }
   return { card, plot: card.querySelector(".plot") };
+}
+
+/* altura proporcional a la cantidad de datos: pocas filas, gráfica compacta */
+function chartHeight({ items = 0, min = 260, max = 520, per = 36 }) {
+  return Math.min(max, Math.max(min, items * per + 140));
 }
 
 const skeleton = (hs) => {
@@ -1696,7 +1710,8 @@ function drawSessionStatsInner(zone, ss, rerender) {
       customdata: b.times.map(fmtLap),
       hovertemplate: `<b>${b.code}</b> · %{customdata}<extra></extra>`,
     })), baseLayout({
-      height: 620, showlegend: false,
+      height: chartHeight({ items: ss.box.length, min: 340, max: 620, per: 52 }),
+      showlegend: false,
       annotations: orden.map((b) => ({
         x: b.code, y: med(b.times), yshift: 16, showarrow: false,
         text: fmtLap(med(b.times)),
@@ -1862,7 +1877,8 @@ function drawSessionStatsInner(zone, ss, rerender) {
     }));
     const ttSt = timeTicks(degSel.map((r) => r.median));
     Plotly.newPlot(cSt.plot, stTraces, baseLayout({
-      height: 440, margin: { l: 64, r: 14, t: 14, b: 44 },
+      height: chartHeight({ items: degSel.length, min: 280, max: 460, per: 34 }),
+      margin: { l: 64, r: 14, t: 14, b: 44 },
       xaxis: { ...baseLayout().xaxis, title: { text: "STINT", font: { size: 10 } }, dtick: 1 },
       yaxis: { ...baseLayout().yaxis, ...ttSt },
       legend: { orientation: "h", y: -0.14, font: { size: 10.5 } },
@@ -2128,7 +2144,7 @@ async function viewEquipos() {
     $view.appendChild(el(`<div class="card" style="margin-bottom:18px">
       <div class="chart-head" style="padding:0 0 6px"><h2>Predicción · ${rot}</h2>
       <span class="sub">regresión ponderada por recencia + 4,000 carreras simuladas · siempre sobre TODO el campo</span></div>
-      ${(pred.summary || []).map((p) => `<div class="chart-summary" style="margin:8px 0 0">${p}</div>`).join("")}
+      ${(pred.summary || []).map((p) => `<div class="chart-summary ${/^(LÍMITES|OJO)/.test(p) ? "warn" : ""}" style="margin:8px 0 0">${p}</div>`).join("")}
     </div>`));
 
     const rowP = el(`<div class="grid cols-2" style="margin-bottom:20px"></div>`);

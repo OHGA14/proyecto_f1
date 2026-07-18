@@ -8,8 +8,8 @@
   --card2: #161a23;
   --border: #23252d;
   --ink: #f3f4f6;
-  --ink2: #9aa0aa;
-  --ink3: #6b7280;
+  --ink2: #b0b7c3;   /* +18% de luz: la letra secundaria se tiene que LEER */
+  --ink3: #8a94a4;
   --red: #ff2d2d;
   --red-rgb: 255, 45, 45;
   --radius: 14px;
@@ -30,8 +30,8 @@ html[data-theme="spacex"] {
   --card2: #0c1219;
   --border: #16202c;
   --ink: #e8f2fc;
-  --ink2: #8fa8c0;
-  --ink3: #587085;
+  --ink2: #a6bcd3;   /* +18% de luz: la letra secundaria se tiene que LEER */
+  --ink3: #7590ab;
   --red: #38bdf8;
   --red-rgb: 56, 189, 248;
   --radius: 4px;
@@ -192,7 +192,7 @@ body {
 }
 .tile .label { font-size: 10px; font-weight: 700; letter-spacing: 2px; color: var(--ink2); text-transform: uppercase; }
 .tile .value { font-size: 30px; font-weight: 800; letter-spacing: .3px; margin-top: 6px; font-variant-numeric: tabular-nums; }
-.tile .hint  { font-size: 11.5px; color: var(--ink3); margin-top: 4px; }
+.tile .hint  { font-size: 12.5px; color: var(--ink3); margin-top: 4px; }
 
 /* selector de temporada */
 .pills { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -214,7 +214,7 @@ body {
 .race-card:hover { transform: translateY(-3px); border-color: #3a3d47; box-shadow: 0 10px 26px rgba(0, 0, 0, .45); }
 .race-card .round { font-size: 10px; font-weight: 700; letter-spacing: 2px; color: var(--ink3); }
 .race-card h3 { font-size: 17px; margin: 5px 0 2px; }
-.race-card .date { font-size: 11.5px; color: var(--ink3); margin-bottom: 10px; }
+.race-card .date { font-size: 12px; color: var(--ink3); margin-bottom: 10px; }
 .race-card .podium { display: flex; gap: 6px; }
 
 .chip {
@@ -236,35 +236,52 @@ body {
 .pod .pos { position: absolute; top: 12px; right: 14px; font-size: 13px; font-weight: 800;
             background: var(--tc); color: #0b0d12; padding: 2px 10px; border-radius: 999px; }
 .pod .code { font-size: 24px; font-weight: 800; }
-.pod .name { font-size: 12.5px; color: var(--ink2); }
-.pod .team { font-size: 10.5px; letter-spacing: 1.6px; text-transform: uppercase; color: var(--ink3); margin-top: 8px; }
+.pod .name { font-size: 13px; color: var(--ink2); }
+.pod .team { font-size: 11px; letter-spacing: 1.6px; text-transform: uppercase; color: var(--ink3); margin-top: 8px; }
 
 /* ─────────────────────────────────────── chart card */
 .chart-card { padding: 0; overflow: hidden; }
-.chart-head { padding: 16px 18px 4px; display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
-.chart-head h2 { font-size: 14px; letter-spacing: 1.2px; text-transform: uppercase; }
-.chart-head .sub { font-size: 11.5px; color: var(--ink3); }
+.chart-head { padding: 16px 18px 6px; display: block; }
+.chart-head-row { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.chart-head h2 { font-size: 15px; letter-spacing: 1.2px; text-transform: uppercase; }
+.chart-head .sub { display: block; margin-top: 5px; font-size: 12.5px; color: var(--ink3); }
+.guide-btn {
+  background: none; border: 1px solid var(--border); color: var(--ink2);
+  font: inherit; font-size: 10.5px; font-weight: 700; letter-spacing: 1.2px;
+  padding: 4px 10px; border-radius: 3px; cursor: pointer; white-space: nowrap;
+}
+.guide-btn:hover, .guide-btn.on {
+  color: var(--ink); border-color: rgba(var(--red-rgb), .55);
+}
 .chart-body { padding: 0 6px; }
 .chart-summary {
   margin: 4px 18px 0; padding: 10px 12px;
   background: rgba(63, 123, 240, .07); border-left: 3px solid #3f7bf0;
-  border-radius: 0 8px 8px 0; font-size: 12.5px; color: #d7dbe2;
+  border-radius: 0 8px 8px 0; font-size: 13px; color: #dde1e8;
+}
+.chart-summary.warn {
+  background: rgba(255, 196, 0, .06); border-left-color: #ffc400;
 }
 .chart-guide { margin: 8px 18px 16px; }
 .chart-guide summary {
-  cursor: pointer; font-size: 12px; color: var(--ink2); font-weight: 600;
+  cursor: pointer; font-size: 12.5px; color: var(--ink2); font-weight: 600;
   padding: 6px 0; list-style: none;
 }
 .chart-guide summary::before { content: "▸ "; color: var(--red); }
 .chart-guide[open] summary::before { content: "▾ "; }
-.chart-guide ul { margin: 4px 0 0 16px; font-size: 12.5px; color: var(--ink2); line-height: 1.65; }
+.chart-guide ul { margin: 4px 0 0 16px; font-size: 13px; color: var(--ink2); line-height: 1.65; }
 .chart-guide b { color: var(--ink); }
 
 .compound-legend { display: flex; gap: 10px; flex-wrap: wrap; margin: 2px 18px 8px; }
-.compound-legend .chip { font-size: 10.5px; }
+.compound-legend .chip { font-size: 11.5px; }
 
 /* ─────────────────────────────────────── tablas */
 .table-wrap { overflow-x: auto; }
+/* cualquier tarjeta con tabla directa scrollea por dentro: nada rompe el ancho */
+.card:has(> table) { overflow-x: auto; }
+@media (max-width: 900px) {
+  .nav { flex-wrap: wrap; justify-content: center; }
+}
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th {
   text-align: left; font-size: 10px; letter-spacing: 1.6px; text-transform: uppercase;
