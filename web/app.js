@@ -2350,52 +2350,209 @@ function drawSessionStatsInner(Z, ss, rerender) {
     Z.estrategia.appendChild(cardMuroPits({ rows, summary: resumenPits }));
   }
 
-  // degradación por stint: filtro de compuesto + gráfica + tabla
-  if (ss.deg && ss.deg.length) {
-    const comps = [...new Set(ss.deg.map((r) => r.compound))];
-    const degSel = state.compFilter && comps.includes(state.compFilter)
-      ? ss.deg.filter((r) => r.compound === state.compFilter) : ss.deg;
-    const fpills = `<div class="pills" style="margin-bottom:14px">
-      <button class="pill ${!state.compFilter ? "active" : ""}" data-c="">TODAS</button>
-      ${comps.map((c) => `<button class="pill ${state.compFilter === c ? "active" : ""}"
-        data-c="${c}" style="--cc:${COMP_COLORS[c] || "#6b7280"}">${c}</button>`).join("")}</div>`;
-    ss.deg = degSel;
-    const peor = [...ss.deg].sort((a, b) => b.slope - a.slope)[0];
-    Z.estrategia.appendChild(el(`<div class="section-title">Análisis de stint y degradación
-      <small> · Mayor degradación: ${peor.code} en el stint ${peor.stint} (${peor.compound}): +${(peor.slope * 1000).toFixed(0)} ms/vuelta</small></div>`));
-    const pillsEl = el(fpills);
-    pillsEl.querySelectorAll("[data-c]").forEach((b) => {
-      b.onclick = () => { state.compFilter = b.dataset.c || null; rerender(); };
-    });
-    Z.estrategia.appendChild(pillsEl);
+  // ── análisis de stint: degradación REAL (dentro del stint) + ritmo comparable
+  //    Dos preguntas, dos gráficas: cuánto empeora la vuelta al envejecer la
+  //    goma (pendiente robusta con IC) y qué ritmo comparable tiene cada stint
+  //    a la MISMA edad de neumático. Nada de conectar compuestos distintos.
+  if (ss.type === "race" && (ss.stints || []).length && (ss.evo || []).length) {
+    const F_COMB = 0.035;  // s/vuelta: corrección de combustible DECLARADA
+    const colorPil = (code) => (ss.evo.find((e) => e.code === code) || {}).color || "#9aa0aa";
+    const comps = [...new Set(ss.stints.map((s) => s.compound))];
+    const mediana2 = (arr) => { const s = [...arr].sort((a, b) => a - b);
+      return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2; };
 
-    // ritmo mediano por stint (marcador = compuesto, línea = piloto)
-    const cSt = chartCard({
-      title: "Ritmo mediano por stint", sub: "cada punto = un stint · color del punto = compuesto",
-      tips: ["<b>¿El punto siguiente más abajo?</b> → mejoró con la goma nueva o el coche más ligero.",
-             "<b>¿Puntos del mismo compuesto a alturas distintas entre pilotos?</b> → gestión, no goma."],
-    });
-    Z.estrategia.appendChild(cSt.card);
-    Z.estrategia.appendChild(el(`<div style="height:20px"></div>`));
-    const porPiloto = {};
-    degSel.forEach((r) => { (porPiloto[r.code] = porPiloto[r.code] || []).push(r); });
-    const stTraces = Object.entries(porPiloto).map(([code, rows]) => ({
-      type: "scatter", mode: "lines+markers", name: code,
-      x: rows.map((r) => r.stint), y: rows.map((r) => r.median),
-      line: { color: rows[0].color, width: 1.8 },
-      marker: { size: 11, color: rows.map((r) => r.comp_color),
-                line: { color: "#11141b", width: 1.5 } },
-      customdata: rows.map((r) => [fmtLap(r.median), r.compound, (r.slope * 1000).toFixed(0)]),
-      hovertemplate: `<b>${code}</b> · stint %{x} (%{customdata[1]})<br>mediana %{customdata[0]} · deg %{customdata[2]} ms/vuelta<extra></extra>`,
-    }));
-    const ttSt = timeTicks(degSel.map((r) => r.median));
-    Plotly.newPlot(cSt.plot, stTraces, baseLayout({
-      height: chartHeight({ items: degSel.length, min: 280, max: 460, per: 34 }),
-      margin: { l: 64, r: 14, t: 14, b: 44 },
-      xaxis: { ...baseLayout().xaxis, title: { text: "STINT", font: { size: 10 } }, dtick: 1 },
-      yaxis: { ...baseLayout().yaxis, ...ttSt },
-      legend: { orientation: "h", y: -0.14, font: { size: 10.5 } },
-    }), PLOTLY_CFG);
+    // pendiente Theil-Sen (mediana de pendientes) + atípicos por MAD + IC por OLS
+    const ajusta = (xs, ys) => {
+      const pend = [];
+      for (let i = 0; i < xs.length; i++)
+        for (let j = i + 1; j < xs.length; j++)
+          if (xs[j] !== xs[i]) pend.push((ys[j] - ys[i]) / (xs[j] - xs[i]));
+      if (!pend.length) return null;
+      const beta = mediana2(pend);
+      const alfa = mediana2(xs.map((x, i) => ys[i] - beta * x));
+      const res = xs.map((x, i) => ys[i] - (alfa + beta * x));
+      const mRes = mediana2(res);
+      const mad = mediana2(res.map((r) => Math.abs(r - mRes)));
+      const lim = 3 * 1.4826 * Math.max(mad, 0.03);
+      const dentro = res.map((r) => Math.abs(r - mRes) <= lim);
+      const xi = xs.filter((_, i) => dentro[i]), yi = ys.filter((_, i) => dentro[i]);
+      if (xi.length < 4) return null;
+      const xm = xi.reduce((a, v) => a + v, 0) / xi.length;
+      const ym = yi.reduce((a, v) => a + v, 0) / yi.length;
+      const sxx = xi.reduce((a, v) => a + (v - xm) ** 2, 0);
+      if (!sxx) return null;
+      const bOls = xi.reduce((a, v, i) => a + (v - xm) * (yi[i] - ym), 0) / sxx;
+      const s2 = Math.max(0, xi.reduce((a, v, i) => a + (yi[i] - (ym + bOls * (v - xm))) ** 2, 0) / (xi.length - 2));
+      const se = Math.sqrt(s2 / sxx);
+      const sePred5 = Math.sqrt(s2 * (1 / xi.length + (5 - xm) ** 2 / sxx));
+      return { beta, alfa, ci: 2 * se, dentro, n: xi.length, sePred5 };
+    };
+
+    const stintsSel = (state.compFilter && comps.includes(state.compFilter)
+      ? ss.stints.filter((s) => s.compound === state.compFilter) : ss.stints)
+      .slice().sort((a, b) => (a.code < b.code ? -1 : a.code > b.code ? 1 : 0) || a.from - b.from);
+
+    const stints = stintsSel.map((st) => {
+      const pts = ((ss.evo.find((e) => e.code === st.code) || { points: [] }).points || [])
+        .filter((p) => p.lap >= st.from && p.lap <= st.to && !p.out && !p.pit);
+      const xs = pts.map((p) => p.lap - st.from + 1);
+      const ys = pts.map((p) => p.t + F_COMB * (p.lap - 1));   // masa ~constante
+      const fit = xs.length >= 5 ? ajusta(xs, ys) : null;
+      const conf = !fit ? null : fit.n < 8 ? "BAJA" : fit.n <= 12 ? "MEDIA" : "BUENA";
+      const nS = ss.stints.filter((s) => s.code === st.code && s.from < st.from).length + 1;
+      return { ...st, nS, xs, ys, fit, conf, color: colorPil(st.code),
+               t5: fit && Math.max(...xs) >= 5 ? fit.alfa + 5 * fit.beta : null };
+    }).filter((s) => s.xs.length >= 3);
+
+    if (stints.length) {
+      const conFit = stints.filter((s) => s.fit);
+      const concluyentes = conFit.filter((s) => s.fit.beta > 0 && s.fit.beta - s.fit.ci > 0)
+        .sort((a, b) => b.fit.beta - a.fit.beta);
+      const top = concluyentes[0] || null;
+      const conT5 = stints.filter((s) => s.t5 != null).sort((a, b) => a.t5 - b.t5);
+      const mejor5 = conT5[0] || null;
+      const incierto = conFit.length ? [...conFit].sort((a, b) => a.fit.n - b.fit.n)[0] : null;
+
+      Z.estrategia.appendChild(el(`<div class="section-title">Análisis de stint y degradación
+        <small> · tiempos a masa constante (+${(F_COMB * 1000).toFixed(0)} ms/vuelta de combustible, declarado) · pendiente robusta con IC 95%</small></div>`));
+      const pillsEl = el(`<div class="pills" style="margin-bottom:14px">
+        <button class="pill ${!state.compFilter ? "active" : ""}" data-c="">TODAS</button>
+        ${comps.map((c) => `<button class="pill ${state.compFilter === c ? "active" : ""}"
+          data-c="${c}" style="--cc:${COMP_COLORS[c] || "#6b7280"}">${c}</button>`).join("")}</div>`);
+      pillsEl.querySelectorAll("[data-c]").forEach((b) => {
+        b.onclick = () => { state.compFilter = b.dataset.c || null; rerender(); };
+      });
+      Z.estrategia.appendChild(pillsEl);
+
+      Z.estrategia.appendChild(el(`<div class="tiles" style="margin-bottom:18px">
+        <div class="card tile" style="--tc:${top ? top.color : "#5b616d"}">
+          <div class="label">Mayor degradación concluyente</div>
+          <div class="value" style="font-size:22px">${top ? `${top.code} · S${top.nS}` : "ninguna"}</div>
+          <div class="hint">${top
+            ? `${top.compound} · +${(top.fit.beta * 1000).toFixed(0)}±${(top.fit.ci * 1000).toFixed(0)} ms/v · ${top.fit.n} vueltas limpias · confianza ${top.conf}`
+            : "ninguna pendiente positiva con el IC completo sobre cero"}</div></div>
+        ${mejor5 ? `<div class="card tile" style="--tc:${mejor5.color}">
+          <div class="label">Mejor ritmo comparable (edad 5)</div>
+          <div class="value" style="font-size:22px">${mejor5.code} · S${mejor5.nS}</div>
+          <div class="hint">${mejor5.compound} · ${fmtLap(mejor5.t5)} estimado con 5 vueltas de goma</div></div>` : ""}
+        ${incierto ? `<div class="card tile" style="--tc:${incierto.color}">
+          <div class="label">Mayor incertidumbre</div>
+          <div class="value" style="font-size:22px">${incierto.code} · S${incierto.nS}</div>
+          <div class="hint">${incierto.fit.n} vueltas limpias · IC ±${(incierto.fit.ci * 1000).toFixed(0)} ms/v</div></div>` : ""}
+      </div>`));
+
+      // gráfica 1: degradación DENTRO del stint (edad vs segundos perdidos)
+      const conAjuste = stints.filter((s) => s.fit);
+      if (conAjuste.length) {
+        const cDeg = chartCard({
+          title: "Degradación dentro del stint",
+          sub: "X = edad del neumático · Y = segundos perdidos vs el inicio (masa constante) · huecos = vueltas excluidas",
+          tips: ["<b>¿Línea que sube?</b> → cada vuelta es más lenta que la anterior a masa constante: tendencia real de degradación (goma + pista + gestión).",
+                 "<b>±IC en la leyenda</b>: si el intervalo llega al cero, la tendencia NO es concluyente.",
+                 "<b>Puntos huecos</b> → vueltas atípicas excluidas del ajuste robusto (tráfico, errores, SC).",
+                 "La pendiente observada mezcla goma, pista, tráfico y gestión; el combustible sí está corregido (35 ms/v declarados)."],
+        });
+        Z.estrategia.appendChild(cDeg.card);
+        Z.estrategia.appendChild(el(`<div style="height:20px"></div>`));
+        const DASH_ST = ["solid", "dash", "dot", "longdash"];
+        const trazasDeg = [];
+        conAjuste.forEach((s) => {
+          const base = s.fit.alfa + s.fit.beta;
+          const nombre = `${s.code} S${s.nS} · ${s.fit.beta >= 0 ? "+" : ""}${(s.fit.beta * 1000).toFixed(0)}±${(s.fit.ci * 1000).toFixed(0)} ms/v`;
+          const xIn = s.xs.filter((_, i) => s.fit.dentro[i]);
+          const yIn = s.ys.filter((_, i) => s.fit.dentro[i]).map((v) => v - base);
+          const xOut = s.xs.filter((_, i) => !s.fit.dentro[i]);
+          const yOut = s.ys.filter((_, i) => !s.fit.dentro[i]).map((v) => v - base);
+          trazasDeg.push({ type: "scatter", mode: "markers", name: nombre, legendgroup: nombre,
+            x: xIn, y: yIn,
+            marker: { size: 7, color: s.color, symbol: "circle",
+                      line: { color: COMP_COLORS[s.compound] || "#11141b", width: 1.5 } },
+            hovertemplate: `<b>${s.code} S${s.nS}</b> · edad %{x}<br>%{y:+.2f}s vs inicio<extra></extra>` });
+          if (xOut.length) trazasDeg.push({ type: "scatter", mode: "markers", showlegend: false,
+            legendgroup: nombre, x: xOut, y: yOut,
+            marker: { size: 7, color: "rgba(0,0,0,0)", symbol: "circle-open",
+                      line: { color: "#6b7280", width: 1.5 } },
+            hovertemplate: "excluida del ajuste · %{y:+.2f}s<extra></extra>" });
+          const eMax = Math.max(...s.xs);
+          trazasDeg.push({ type: "scatter", mode: "lines", showlegend: false, legendgroup: nombre,
+            x: [1, eMax], y: [0, s.fit.beta * (eMax - 1)],
+            line: { color: s.color, width: 2, dash: DASH_ST[(s.nS - 1) % DASH_ST.length] },
+            hoverinfo: "skip" });
+        });
+        Plotly.newPlot(cDeg.plot, trazasDeg, baseLayout({
+          height: 400, margin: { l: 56, r: 16, t: 14, b: 46 },
+          xaxis: { ...baseLayout().xaxis, title: { text: "EDAD DEL NEUMÁTICO (VUELTAS)", font: { size: 10 } }, dtick: 2 },
+          yaxis: { ...baseLayout().yaxis, title: { text: "SEGUNDOS PERDIDOS VS INICIO", font: { size: 10 } },
+                   zeroline: true, zerolinecolor: "rgba(255,255,255,.25)" },
+          legend: { orientation: "h", y: -0.16, font: { size: 10 } },
+        }), PLOTLY_CFG);
+      }
+
+      // gráfica 2: ritmo comparable a edad común (SIN conectar compuestos)
+      if (conT5.length) {
+        let sumCmp = "";
+        if (top && mejor5) {
+          const rivalMismo = conT5.find((s) => s.code !== mejor5.code && s.compound === mejor5.compound);
+          sumCmp = `Mayor pendiente concluyente: ${top.code} en S${top.nS} (${top.compound}, +${(top.fit.beta * 1000).toFixed(0)} ms/v, confianza ${top.conf}).` +
+            (rivalMismo ? ` A igual edad de goma, ${mejor5.code} mantiene ${(rivalMismo.t5 - mejor5.t5).toFixed(2)}s sobre ${rivalMismo.code} en ${mejor5.compound}.` : "") +
+            ` La mejora de mediana entre stints se explica en parte por el combustible: no contradice la degradación interna.`;
+        } else if (!top) {
+          sumCmp = "Ninguna pendiente de degradación es estadísticamente concluyente en esta selección (IC cruzando el cero o pocas vueltas limpias).";
+        }
+        const cCmp = chartCard({
+          title: "Ritmo típico por stint · comparable a edad 5",
+          sub: "punto = tiempo estimado con 5 vueltas de goma y masa constante · barra = incertidumbre · sin conectar compuestos distintos",
+          summary: sumCmp,
+          tips: ["Cada stint se evalúa a la MISMA edad de neumático (5 vueltas): comparar medianas de stints de distinta longitud mezcla ritmo con duración.",
+                 "<b>¿Barras que se traslapan?</b> → diferencia no concluyente.",
+                 "Stints sin 5 vueltas limpias quedan fuera de esta comparación.",
+                 "Diferencias entre stints del mismo compuesto pueden venir de goma, tráfico, pista o gestión — compara a igual edad antes de atribuir la causa."],
+        });
+        Z.estrategia.appendChild(cCmp.card);
+        Z.estrategia.appendChild(el(`<div style="height:20px"></div>`));
+        const etiquetas = conT5.map((s) => `${s.code} · S${s.nS} ${s.compound}`);
+        const ttC = timeTicks(conT5.map((s) => s.t5));
+        Plotly.newPlot(cCmp.plot, [{
+          type: "scatter", mode: "markers",
+          y: etiquetas, x: conT5.map((s) => s.t5),
+          error_x: { type: "data", array: conT5.map((s) => 2 * (s.fit.sePred5 || 0)),
+                     color: "rgba(148,163,184,.45)", thickness: 1.4, width: 5 },
+          marker: { size: 11, color: conT5.map((s) => COMP_COLORS[s.compound] || "#9aa0aa"),
+                    line: { color: conT5.map((s) => s.color), width: 2 } },
+          customdata: conT5.map((s) => [fmtLap(s.t5), s.fit.n, s.conf]),
+          hovertemplate: "<b>%{y}</b><br>%{customdata[0]} a edad 5 · %{customdata[1]} vueltas limpias · confianza %{customdata[2]}<extra></extra>",
+          showlegend: false,
+        }], baseLayout({
+          height: chartHeight({ items: conT5.length, min: 260, max: 520, per: 42 }),
+          margin: { l: 150, r: 24, t: 10, b: 44 },
+          xaxis: { ...baseLayout().xaxis, ...ttC, tickfont: { size: 10.5 } },
+          yaxis: { ...baseLayout().yaxis, autorange: "reversed", gridcolor: "rgba(255,255,255,.05)",
+                   tickfont: { size: 11 } },
+        }), PLOTLY_CFG);
+      }
+
+      // tabla completa: todos los números que sustentan las tarjetas
+      const conDatos = stints.filter((s) => s.fit);
+      if (conDatos.length) {
+        Z.estrategia.appendChild(el(`<div class="card table-wrap" style="margin-bottom:20px">
+          <div class="chart-head" style="padding:0 0 8px"><h2>Detalle por stint</h2>
+          <span class="sub">pendiente robusta (Theil-Sen) · IC 95% aproximado · atípicos excluidos por MAD</span></div>
+          <table><thead><tr><th>Piloto</th><th class="num">Stint</th><th>Compuesto</th>
+            <th class="num">V. limpias</th><th class="num">Pendiente (ms/v)</th>
+            <th class="num">IC 95%</th><th>Confianza</th><th class="num">Ritmo edad 5</th></tr></thead>
+          <tbody>${conDatos.map((s) => {
+            const b = s.fit.beta * 1000, c = s.fit.ci * 1000;
+            const concl = b > 0 && b - c > 0;
+            return `<tr><td>${drvChip(s.code, s.color)}</td><td class="num">S${s.nS}</td>
+              <td><span class="chip" style="--cc:${COMP_COLORS[s.compound] || "#6b7280"}"><i></i>${s.compound}</span></td>
+              <td class="num">${s.fit.n}</td>
+              <td class="num" style="${concl ? "font-weight:800" : ""}">${b >= 0 ? "+" : ""}${b.toFixed(0)}</td>
+              <td class="num">±${c.toFixed(0)}</td>
+              <td>${s.conf}${concl ? "" : " · no concluyente"}</td>
+              <td class="num">${s.t5 != null ? fmtLap(s.t5) : "—"}</td></tr>`;
+          }).join("")}</tbody></table></div>`));
+      }
+    }
   }
 
   // parrilla → meta (solo carrera)
