@@ -357,13 +357,14 @@ def session_detail(sid):
                                    + (f", saliendo P{w['grid']}." if w['grid'] else "."))
             if best.size:
                 fl_code = best.idxmin()
-                summaries["pace"] = (f"Vuelta más rápida: {fmt_lap(float(best.min()))} "
-                                     f"de {fl_code}.")
+                summaries["pace"] = (f"Vuelta más rápida de toda la carrera: "
+                                     f"{fmt_lap(float(best.min()))} de {fl_code}.")
             paradas = {s_["code"]: len(s_["stints"]) - 1 for s_ in strategy}
             if paradas:
                 import statistics
                 moda = statistics.mode(paradas.values())
-                summaries["strategy"] = (f"Estrategia dominante: {moda} parada(s). "
+                summaries["strategy"] = (f"Estrategia dominante en toda la parrilla: "
+                                         f"{moda} parada(s). "
                                          f"El ganador hizo {paradas.get(w['code'], '?')}.")
             subida = max((r for r in results if r["delta_pos"] is not None),
                          key=lambda r: r["delta_pos"], default=None)

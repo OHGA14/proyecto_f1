@@ -279,9 +279,22 @@ async function viewCarrera() {
   const two = $view;  // las gráficas van a ANCHO COMPLETO, una tras otra
   const pace = F(d.pace);
   const allT = pace.flatMap((p) => p.times);
+  // resumen con ALCANCE explícito: tu selección vs toda la carrera
+  let sumPace = d.summaries.pace || "";
+  {
+    const conBest = d.results.filter((r) => r.best_lap_s != null);
+    const selBest = conBest.filter((r) => selC.has(r.code));
+    if (conBest.length && selBest.length) {
+      const bAll = conBest.reduce((a, r) => (r.best_lap_s < a.best_lap_s ? r : a));
+      const bSel = selBest.reduce((a, r) => (r.best_lap_s < a.best_lap_s ? r : a));
+      sumPace = selC.has(bAll.code)
+        ? `Vuelta más rápida de toda la carrera: ${bAll.best_lap} de ${bAll.code} — está en tu selección.`
+        : `Entre tus seleccionados, la más rápida es ${bSel.best_lap} de ${bSel.code}. La de toda la carrera fue ${bAll.best_lap} de ${bAll.code} (no seleccionado).`;
+    }
+  }
   const c1 = chartCard({
     title: "Ritmo vuelta a vuelta", sub: "pilotos seleccionados · sin vueltas de pits",
-    summary: d.summaries.pace || "",
+    summary: sumPace,
     tips: [
       "<b>¿Una línea consistentemente abajo?</b> → ese piloto tenía el mejor ritmo de carrera.",
       "<b>¿Escalones hacia abajo?</b> → goma nueva tras parar; compáralo con la estrategia.",
@@ -1504,7 +1517,8 @@ function drawSessionStatsInner(zone, ss, rerender) {
   if (ss.cv.length) {
     const rap = [...ss.cv].sort((a, b) => a.median - b.median)[0];
     const con = ss.cv[0];
-    sumRitmo = `Mejor ritmo mediano: ${rap.code} (${rap.median_label}). Más consistente: ` +
+    const alcance = state.ritmoAll ? "de todo el campo" : "entre tus seleccionados";
+    sumRitmo = `Mejor ritmo mediano ${alcance}: ${rap.code} (${rap.median_label}). Más consistente: ` +
                `${con.code} (CV ${con.cv.toFixed(2)}%). El más rápido no siempre es el más regular.`;
   }
 
@@ -1543,17 +1557,18 @@ function drawSessionStatsInner(zone, ss, rerender) {
       summary: sumRitmo,
       tips: ["<b>¿La línea baja poco a poco?</b> → el coche mejora al quemar combustible; si sube, la goma degrada más de lo que el combustible regala.",
              "<b>¿Escalón hacia abajo tras una ✕?</b> → paró y volvió con goma nueva.",
+             "Las vueltas atípicas (pits, SC, errores) arrancan OCULTAS porque estiran la escala y aplastan las diferencias reales; el botón de arriba las trae de vuelta.",
              "Toca un piloto en la leyenda para aislarlo."],
       legendHtml: `<div class="compound-legend">${Object.entries(COMP_COLORS).map(([k, v]) =>
         `<span class="chip" style="--cc:${v}"><i></i>${k}</span>`).join("")}
         <span class="chip" style="--cc:#5b616d"><i></i>✕ atípica</span>
         <span class="chip" style="--cc:#fff"><i></i>◆ pit</span>
-        <button class="pill" id="evoTgl" style="margin-left:auto">${state.evoOut === false ? "MOSTRAR" : "OCULTAR"} ATÍPICAS</button></div>`,
+        <button class="pill" id="evoTgl" style="margin-left:auto">${state.evoOut === true ? "OCULTAR ATÍPICAS" : "MOSTRAR ATÍPICAS"}</button></div>`,
     });
     zone.appendChild(cEvo.card);
     zone.appendChild(el(`<div style="height:20px"></div>`));
     cEvo.card.querySelector("#evoTgl").onclick = () => {
-      state.evoOut = state.evoOut === false;
+      state.evoOut = state.evoOut !== true;
       rerender();
     };
     const traces = [];
@@ -1571,7 +1586,10 @@ function drawSessionStatsInner(zone, ss, rerender) {
       e.points.filter((p) => p.out).forEach((p) => { outX.push(p.lap); outY.push(p.t); });
       e.points.filter((p) => p.pit).forEach((p) => { pitX.push(p.lap); pitY.push(p.t); pitC.push(e.color); });
     });
-    const mostrar = state.evoOut !== false;
+    const mostrar = state.evoOut === true;   // ocultas por defecto
+    const nOcultas = outX.length + pitX.length;
+    if (!mostrar && nOcultas)
+      cEvo.card.querySelector("#evoTgl").textContent = `${nOcultas} ATÍPICAS OCULTAS · MOSTRAR`;
     if (mostrar && outX.length)
       traces.push({ type: "scatter", mode: "markers", name: "Atípicas",
         x: outX, y: outY, marker: { symbol: "x-thin-open", size: 6, color: "#5b616d" },
@@ -1769,14 +1787,22 @@ function drawSessionStatsInner(zone, ss, rerender) {
     (ss.pits || []).forEach((p) => { pitsMap[p.code] = p; });
     const orden = [...new Set(ss.stints.map((x) => x.code))];
 
-    const conDato = (ss.pits || []).filter((p) => p.total_lost != null && p.stops.length);
+    // solo cuentan las paradas MEDIBLES (las que cayeron bajo SC/VSC vienen sin dato)
+    const medibles = (p) => p.stops.filter((s) => s.lost != null).length;
+    const conDato = (ss.pits || []).filter((p) => p.total_lost != null && medibles(p) > 0);
+    const porParada = (p) => p.total_lost / medibles(p);
     let resumenPits = "";
-    if (conDato.length) {
-      const porParada = (p) => p.total_lost / p.stops.length;
-      const rapida = [...conDato].sort((a, b) => porParada(a) - porParada(b))[0];
-      const lenta = [...conDato].sort((a, b) => porParada(b) - porParada(a))[0];
-      resumenPits = `Parada más eficiente: ${rapida.code} (~${porParada(rapida).toFixed(1)}s perdidos por parada). ` +
-                    `La más cara: ${lenta.code} (~${porParada(lenta).toFixed(1)}s).`;
+    if (conDato.length === 1) {
+      const p = conDato[0];
+      resumenPits = `Solo ${p.code} tiene paradas medibles: ~${porParada(p).toFixed(1)}s ` +
+                    `perdidos por parada vs sus vueltas limpias. El resto de paradas no ` +
+                    `es comparable (cayeron bajo SC/VSC o falta el dato).`;
+    } else if (conDato.length > 1) {
+      const orden2 = [...conDato].sort((a, b) => porParada(a) - porParada(b));
+      const rapida = orden2[0], lenta = orden2[orden2.length - 1];
+      resumenPits = `Parada más eficiente: ${rapida.code} (~${porParada(rapida).toFixed(1)}s ` +
+                    `perdidos por parada vs sus vueltas limpias). La más cara: ` +
+                    `${lenta.code} (~${porParada(lenta).toFixed(1)}s).`;
     }
 
     const rows = orden.map((code) => {
