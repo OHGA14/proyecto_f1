@@ -873,8 +873,15 @@ async function renderPilotos(zone) {
                 ["telemetria", "TELEMETRÍA"], ["fisica", "FÍSICA"], ["replay", "REPLAY"]];
   if (!TABS.some(([k]) => k === state.anaTab)) state.anaTab = "resumen";
   const bar = el(`<div class="ana-tabs">${TABS.map(([k, t]) =>
-    `<button class="ana-tab ${state.anaTab === k ? "active" : ""}" data-tab="${k}">${t}</button>`).join("")}</div>`);
+    `<button class="ana-tab ${state.anaTab === k ? "active" : ""}" data-tab="${k}">${t}</button>`).join("")}
+    <span class="ana-sel" title="Ir a la selección de pilotos">${d.drivers.map((x) =>
+      `<span><i style="background:${x.color}"></i>${x.code}${x.code === d.ref ? " <small>REF</small>" : ""}</span>`).join("")}</span></div>`);
   zone.appendChild(bar);
+  // clic en los pilotos de la barra → volver arriba a cambiar la selección
+  bar.querySelector(".ana-sel").onclick = () => {
+    const y = chipsCard.getBoundingClientRect().top + scrollY - (_tbH + 80);
+    window.scrollTo({ top: Math.max(0, y), behavior: "smooth" });
+  };
 
   const wraps = {};
   TABS.forEach(([k]) => { wraps[k] = el(`<div></div>`); zone.appendChild(wraps[k]); });
@@ -4065,6 +4072,25 @@ async function viewEquipos() {
     }), PLOTLY_CFG);
   }
 }
+
+/* la topbar es sticky y su altura varía con el wrap: se mide de verdad
+   para que la barra de pestañas de ANÁLISIS se pegue justo debajo */
+let _tbH = 0;
+const fijaAlturaTopbar = () => {
+  const tb = document.querySelector(".topbar");
+  if (!tb) return;
+  const h = Math.round(tb.getBoundingClientRect().height);
+  if (h && h !== _tbH) {
+    _tbH = h;
+    document.documentElement.style.setProperty("--topbar-h", h + "px");
+  }
+};
+addEventListener("scroll", fijaAlturaTopbar, { passive: true });
+addEventListener("resize", fijaAlturaTopbar);
+addEventListener("load", fijaAlturaTopbar);
+if (document.fonts && document.fonts.ready)
+  document.fonts.ready.then(fijaAlturaTopbar);   // la fuente DIN cambia la altura
+fijaAlturaTopbar();
 
 /* ───────────────────────────── router */
 const VIEWS = { temporada: viewTemporada, carrera: viewCarrera, h2h: viewH2H,

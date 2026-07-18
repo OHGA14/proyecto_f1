@@ -442,7 +442,8 @@ html[data-theme="spacex"] body::before {
   -webkit-mask-image: radial-gradient(1100px 560px at 50% 0%, #000 25%, transparent 78%);
           mask-image: radial-gradient(1100px 560px at 50% 0%, #000 25%, transparent 78%);
 }
-.topbar, .view, .footer { position: relative; z-index: 1; }
+/* la topbar NO va aquí: este 'relative' pisaba su position:sticky */
+.view, .footer { position: relative; z-index: 1; }
 
 /* barra superior: sombra al hacer scroll + línea de barrido */
 .topbar { transition: box-shadow .3s ease; }
@@ -605,10 +606,29 @@ html[data-theme="spacex"] .btn-red { border-radius: 3px; }
 
 /* ─────────────────────────────────────── ANÁLISIS: pestañas + misión */
 .ana-tabs {
-  display: flex; gap: 26px; flex-wrap: wrap;
+  display: flex; gap: 26px; flex-wrap: wrap; align-items: center;
   border-bottom: 1px solid var(--border);
   margin: 4px 0 20px;
+  /* PEGAJOSA: las pestañas siguen visibles al bajar (bajo la topbar) */
+  /* -12px: se esconde ligeramente BAJO la topbar (z 50 > 40) y nunca
+     queda hueco aunque la medición de altura traiga redondeos */
+  position: sticky; top: calc(var(--topbar-h, 72px) - 12px); z-index: 40;
+  padding-top: 8px;
+  background: color-mix(in srgb, var(--bg) 90%, transparent);
+  backdrop-filter: blur(10px);
 }
+.ana-sel {
+  margin-left: auto; display: flex; gap: 12px; align-items: center;
+  flex-wrap: wrap; padding: 6px 0;
+  font-size: 11px; font-weight: 700; letter-spacing: 1px; color: var(--ink2);
+  cursor: pointer;
+}
+.ana-sel:hover { color: var(--ink); }
+.ana-sel i {
+  display: inline-block; width: 8px; height: 8px; border-radius: 2px;
+  margin-right: 5px; vertical-align: baseline;
+}
+.ana-sel small { color: var(--ink3); font-size: 9px; letter-spacing: 1.5px; }
 .ana-tab {
   background: none; border: none; cursor: pointer;
   color: var(--ink2); font: inherit; font-size: 12.5px; font-weight: 700;
