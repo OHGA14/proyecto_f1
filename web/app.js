@@ -2840,9 +2840,29 @@ function drawSessionStatsInner(Z, ss, rerender) {
     const med = (arr) => { const a = [...arr].sort((x, y) => x - y);
       return a.length % 2 ? a[(a.length - 1) / 2] : (a[a.length / 2 - 1] + a[a.length / 2]) / 2; };
     const orden = [...ss.box].sort((a, b) => med(a.times) - med(b.times));
+    let sumBox = "";
+    if (ss.box.length === 2 && ss.box[0].times.length >= 8 && ss.box[1].times.length >= 8) {
+      // bootstrap de la diferencia de MEDIANAS (4,000 remuestreos)
+      const medArr = (a) => { const s = [...a].sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
+      const [A, B] = [...ss.box].sort((a, b) => medArr(a.times) - medArr(b.times));
+      const difs = [];
+      for (let it = 0; it < 4000; it++) {
+        const re = (arr) => arr[Math.floor(Math.random() * arr.length)];
+        const sa = A.times.map(() => re(A.times)), sb = B.times.map(() => re(B.times));
+        difs.push(medArr(sb) - medArr(sa));
+      }
+      difs.sort((x, y) => x - y);
+      const lo = difs[Math.floor(0.025 * difs.length)], hi = difs[Math.floor(0.975 * difs.length)];
+      const D = medArr(B.times) - medArr(A.times);
+      sumBox = `Diferencia de medianas: ${A.code} ${D.toFixed(3)}s más rápido que ${B.code} · ` +
+        `IC 95% bootstrap [${lo.toFixed(3)}, ${hi.toFixed(3)}] → ` +
+        `${lo > 0 ? "diferencia CONCLUYENTE" : "diferencia INCONCLUSA"}. ` +
+        `La dispersión mezcla compuestos, stints y tráfico: no es solo 'consistencia'.`;
+    }
     const cBox = chartCard({
       title: "Distribución de ritmo",
       sub: "horizontal: más a la IZQUIERDA = más rápido · el más veloz arriba · cada punto = una vuelta limpia",
+      summary: sumBox,
       tips: ["<b>¿Caja más a la izquierda?</b> → ese piloto rueda más rápido; los tiempos se leen como en una recta de meta.",
              "<b>¿Caja corta?</b> → piloto metrónomo: casi todas sus vueltas son iguales.",
              "<b>¿Caja adelantada pero larga?</b> → rápido pero irregular; la mediana (línea central) es su ritmo real.",
@@ -2861,7 +2881,7 @@ function drawSessionStatsInner(Z, ss, rerender) {
       customdata: b.times.map(fmtLap),
       hovertemplate: `<b>${b.code}</b> · %{customdata}<extra></extra>`,
     })), baseLayout({
-      height: chartHeight({ items: ss.box.length, min: 300, max: 640, per: 48 }),
+      height: chartHeight({ items: ss.box.length, min: 280, max: 560, per: 44 }),
       showlegend: false,
       annotations: orden.map((b) => ({
         y: b.code, x: med(b.times), yshift: 25, showarrow: false,
@@ -2878,56 +2898,102 @@ function drawSessionStatsInner(Z, ss, rerender) {
   // CONSISTENCIA (CV): tabla a lo ancho
   if (ss.cv.length) {
     const badge = (v) => v < 0.9 ? ["#2ECC71", "Estable"] : v < 1.3 ? ["#FFC400", "Media"] : ["#FF5252", "Variable"];
+    const madDe = (code) => {
+      const b = (ss.box || []).find((x) => x.code === code);
+      if (!b || !b.times.length) return null;
+      const s = [...b.times].sort((x, y) => x - y);
+      const med = s[Math.floor(s.length / 2)];
+      const des = b.times.map((t2) => Math.abs(t2 - med)).sort((x, y) => x - y);
+      return des[Math.floor(des.length / 2)];
+    };
     const rows = ss.cv.map((r) => {
       const [c, t] = badge(r.cv);
+      const mad = madDe(r.code);
       return `<tr><td>${drvChip(r.code, r.color)}</td><td class="num">${r.laps}</td>
-        <td class="num">${r.median_label}</td><td class="num">${r.sigma.toFixed(3)}</td>
-        <td class="num">${r.iqr.toFixed(3)}</td>
-        <td class="num"><b style="color:${c}">${r.cv.toFixed(2)}%</b> <small style="color:${c}">${t}</small></td></tr>`;
+        <td class="num">${r.median_label}</td>
+        <td class="num"><b>${mad != null ? mad.toFixed(3) : "—"}</b></td>
+        <td class="num">${r.iqr.toFixed(3)}</td><td class="num">${r.sigma.toFixed(3)}</td>
+        <td class="num" style="color:${c}">${r.cv.toFixed(2)}% <small>${t}</small></td></tr>`;
     }).join("");
     Z.ritmo.appendChild(el(`<div class="card table-wrap" style="margin-bottom:20px">
       <div class="chart-head" style="padding:0 0 8px">
-      <h2>Consistencia (CV)</h2><span class="sub">CV = σ / mediana · menor = más regular</span></div>
+      <h2>Dispersión de vueltas limpias</h2><span class="sub">MAD e IQR son robustos; el CV (σ/mediana) queda como secundario · menor dispersión NO implica por sí sola mayor consistencia de conducción (mezcla compuestos, stints y tráfico)</span></div>
       <table><thead><tr><th>Piloto</th><th class="num">Vueltas</th><th class="num">Mediana</th>
-      <th class="num">σ</th><th class="num">IQR</th><th class="num">CV</th></tr></thead>
+      <th class="num">MAD</th><th class="num">IQR</th><th class="num">σ</th><th class="num">CV</th></tr></thead>
       <tbody>${rows}</tbody></table></div>`));
   }
 
-  // ritmo corregido por combustible (solo carrera) con slider
+  // ── ritmo AJUSTADO por efecto estimado del combustible (solo carrera):
+  //    supuesto BAJO/BASE/ALTO con banda de sensibilidad, trazas por stint
   if (ss.type === "race" && ss.evo.length) {
+    const K_BAJO = 0.025, K_BASE = 0.035, K_ALTO = 0.045;
     const cFuel = chartCard({
-      title: "Ritmo corregido por combustible", sub: "quita el efecto del peso para ver la degradación pura",
-      tips: ["<b>¿Línea plana tras corregir?</b> → la goma aguantó: lo que ganaba era solo combustible.",
-             "<b>¿Sigue subiendo?</b> → degradación real del neumático.",
-             "Mueve el deslizador: ~0.035 s/vuelta es lo típico por quema de combustible."],
+      title: "Ritmo ajustado por efecto estimado del combustible",
+      sub: "tiempos trasladados a una referencia común de masa · NO elimina tráfico, pista ni gestión · banda = supuesto 25-45 ms/v",
+      tips: ["<b>¿Tendencia cercana a cero tras ajustar?</b> → el tiempo no empeoró claramente BAJO EL SUPUESTO elegido; no prueba por sí sola que la goma 'aguantó'.",
+             "<b>¿Sube bajo TODO el rango de la banda?</b> → la conclusión es robusta al supuesto de combustible: hay tendencia real de empeoramiento.",
+             "<b>¿La historia cambia entre BAJO y ALTO?</b> → la conclusión depende del supuesto: trátala como inconclusa.",
+             "La corrección es una ESTIMACIÓN lineal (no hay combustible medido); bajo SC o gestión la relación real cambia.",
+             "Cada stint es una línea separada: cambiar de goma o parar no es una evolución continua."],
     });
     Z.ritmo.appendChild(cFuel.card);
-    const ctl = el(`<div style="padding:0 18px 10px;display:flex;gap:12px;align-items:center">
-      <span style="font-size:11px;color:var(--ink3)">CORRECCIÓN</span>
-      <input type="range" min="0" max="0.08" step="0.005" value="0.035" style="flex:1;max-width:340px">
-      <b id="fuelval" style="font-size:12.5px">0.035 s/vuelta</b></div>`);
+    const ctl = el(`<div class="pills" style="padding:0 18px 10px">
+      <span style="font-size:10px;letter-spacing:1.5px;color:var(--ink3);font-weight:700;align-self:center">EFECTO SUPUESTO</span>
+      <button class="pill" data-k="${K_BAJO}">BAJO · 25</button>
+      <button class="pill active" data-k="${K_BASE}">BASE · 35</button>
+      <button class="pill" data-k="${K_ALTO}">ALTO · 45 ms/v</button></div>`);
     cFuel.card.insertBefore(ctl, cFuel.card.querySelector(".chart-guide"));
     const drawFuel = (k) => {
-      const traces = ss.evo.map((e) => {
-        const limpio = e.points.filter((p) => !p.out);
-        return { type: "scatter", mode: "lines", name: e.code,
-          x: limpio.map((p) => p.lap), y: limpio.map((p) => p.t + k * (p.lap - 1)),
-          line: { color: e.color, width: 1.7 },
-          hovertemplate: `<b>${e.code}</b> · V%{x}<br>%{y:.3f}s corregido<extra></extra>` };
+      ctl.querySelectorAll("[data-k]").forEach((b) =>
+        b.classList.toggle("active", +b.dataset.k === k));
+      const traces = [];
+      ss.evo.forEach((e) => {
+        const stintsDe = (ss.stints || []).filter((s) => s.code === e.code)
+          .sort((a, b) => a.from - b.from);
+        const tramos = stintsDe.length ? stintsDe : [{ from: -1e9, to: 1e9 }];
+        let primera = true;
+        tramos.forEach((st) => {
+          const limpio = e.points.filter((p) => !p.out && p.lap >= st.from && p.lap <= st.to);
+          if (limpio.length < 2) return;
+          const xsL = [], loL = [], hiL = [], midL = [];
+          limpio.forEach((p, i) => {
+            if (i && p.lap - limpio[i - 1].lap > 1) {
+              xsL.push(null); loL.push(null); hiL.push(null); midL.push(null);
+            }
+            xsL.push(p.lap);
+            midL.push(p.t + k * (p.lap - 1));
+            loL.push(p.t + K_BAJO * (p.lap - 1));
+            hiL.push(p.t + K_ALTO * (p.lap - 1));
+          });
+          // banda de sensibilidad: si la conclusión cambia dentro de la banda,
+          // depende del supuesto — el usuario lo VE en vez de creerle al slider
+          traces.push({ type: "scatter", mode: "lines", showlegend: false,
+            legendgroup: e.code, x: xsL, y: loL, connectgaps: false,
+            line: { width: 0 }, hoverinfo: "skip" });
+          traces.push({ type: "scatter", mode: "lines", showlegend: false,
+            legendgroup: e.code, x: xsL, y: hiL, connectgaps: false,
+            fill: "tonexty", fillcolor: rgba(e.color, 0.07),
+            line: { width: 0 }, hoverinfo: "skip" });
+          traces.push({ type: "scatter", mode: "lines", name: e.code,
+            legendgroup: e.code, showlegend: primera, connectgaps: false,
+            x: xsL, y: midL,
+            line: { color: e.color, width: 1.7 },
+            hovertemplate: `<b>${e.code}</b> · V%{x}<br>%{y:.3f}s ajustado<extra></extra>` });
+          primera = false;
+        });
       });
       Plotly.react(cFuel.plot, traces, baseLayout({
         height: 440, hovermode: "x unified",
         margin: { l: 64, r: 14, t: 14, b: 44 },
         xaxis: { ...baseLayout().xaxis, title: { text: "VUELTA", font: { size: 10 } } },
-        yaxis: { ...baseLayout().yaxis, title: { text: "SEGUNDOS (CORREGIDO)", font: { size: 10 } } },
+        yaxis: { ...baseLayout().yaxis, title: { text: "SEGUNDOS (AJUSTADOS)", font: { size: 10 } } },
         legend: { orientation: "h", y: -0.12, font: { size: 10.5 } },
       }), PLOTLY_CFG);
     };
-    ctl.querySelector("input").oninput = (e2) => {
-      ctl.querySelector("#fuelval").textContent = `${(+e2.target.value).toFixed(3)} s/vuelta`;
-      drawFuel(+e2.target.value);
-    };
-    drawFuel(0.035);
+    ctl.querySelectorAll("[data-k]").forEach((b) => {
+      b.onclick = () => drawFuel(+b.dataset.k);
+    });
+    drawFuel(K_BASE);
     Z.ritmo.appendChild(el(`<div style="height:18px"></div>`));
   }
 
@@ -2943,18 +3009,20 @@ function drawSessionStatsInner(Z, ss, rerender) {
     const medibles = (p) => p.stops.filter((s) => s.lost != null).length;
     const conDato = (ss.pits || []).filter((p) => p.total_lost != null && medibles(p) > 0);
     const porParada = (p) => p.total_lost / medibles(p);
+    const cobertura = (p) => `${medibles(p)} de ${p.stops.length} paradas medibles`;
     let resumenPits = "";
     if (conDato.length === 1) {
       const p = conDato[0];
-      resumenPits = `Solo ${p.code} tiene paradas medibles: ~${porParada(p).toFixed(1)}s ` +
-                    `perdidos por parada vs sus vueltas limpias. El resto de paradas no ` +
-                    `es comparable (cayeron bajo SC/VSC o falta el dato).`;
+      resumenPits = `Solo ${p.code} tiene paradas medibles (${cobertura(p)}): pérdida promedio ` +
+                    `estimada ~${porParada(p).toFixed(1)}s. El resto no es comparable ` +
+                    `(SC/VSC o sin dato).`;
     } else if (conDato.length > 1) {
       const orden2 = [...conDato].sort((a, b) => porParada(a) - porParada(b));
       const rapida = orden2[0], lenta = orden2[orden2.length - 1];
-      resumenPits = `Parada más eficiente: ${rapida.code} (~${porParada(rapida).toFixed(1)}s ` +
-                    `perdidos por parada vs sus vueltas limpias). La más cara: ` +
-                    `${lenta.code} (~${porParada(lenta).toFixed(1)}s).`;
+      resumenPits = `Menor pérdida promedio estimada: ${rapida.code} ` +
+                    `(~${porParada(rapida).toFixed(1)}s por parada, ${cobertura(rapida)}). ` +
+                    `Mayor: ${lenta.code} (~${porParada(lenta).toFixed(1)}s, ${cobertura(lenta)}). ` +
+                    `Paradas bajo SC no entran: no son comparables con paradas en verde.`;
     }
 
     const rows = orden.map((code) => {
@@ -3195,68 +3263,164 @@ function drawSessionStatsInner(Z, ss, rerender) {
     }
   }
 
-  // parrilla → meta (solo carrera)
+  // ── parrilla → meta: dumbbell de cambio NETO de posición
   if (ss.grid && ss.grid.length) {
+    const mejorG = [...ss.grid].sort((a, b) => b.delta - a.delta)[0];
     const cGr = chartCard({
-      title: "Parrilla → meta", sub: "posiciones ganadas (verde) o perdidas (rojo) respecto a la salida",
-      summary: (ss.grid[0] && ss.grid[0].delta > 0)
-        ? `Mayor remontada del grupo: ${ss.grid[0].code} (P${ss.grid[0].grid} → P${ss.grid[0].pos}, +${ss.grid[0].delta}).` : "",
-      tips: ["<b>¿Barra verde larga?</b> → gran remontada: salió atrás y acabó delante.",
-             "<b>¿Roja larga?</b> → mal día: problema mecánico, sanción o mala estrategia."],
+      title: "Parrilla → meta · cambio neto de posición",
+      sub: "círculo hueco = salida · relleno = meta · el cambio NETO no distingue adelantamientos, estrategia, sanciones ni retiros rivales",
+      summary: (mejorG && mejorG.delta > 0)
+        ? `${mejorG.code} logró el mayor avance neto entre los seleccionados: P${mejorG.grid} → P${mejorG.pos} (+${mejorG.delta}). El cambio neto no dice CÓMO se consiguió.`
+        : "",
+      tips: ["<b>¿Línea larga hacia la izquierda?</b> → gran avance NETO; puede venir de adelantamientos, estrategia o retiros ajenos — crúzalo con el lap chart.",
+             "<b>¿Hacia la derecha?</b> → perdió posiciones netas: problema, sanción o estrategia que no pagó.",
+             "La posición es ordinal: +2 posiciones no equivale a 'el doble de mejora' — P1-P2 pueden separarse 0.2s o 20s."],
     });
     Z.estrategia.appendChild(cGr.card);
     Z.estrategia.appendChild(el(`<div style="height:18px"></div>`));
-    const g = [...ss.grid].reverse();
-    Plotly.newPlot(cGr.plot, [{
-      type: "bar", orientation: "h",
-      y: g.map((x) => x.code), x: g.map((x) => x.delta),
-      marker: { color: g.map((x) => x.delta > 0 ? "#2ECC71" : x.delta < 0 ? "#FF5252" : "#5b616d"),
-                line: { color: "#11141b", width: 2 } },
-      text: g.map((x) => ` P${x.grid}→P${x.pos} `), textposition: "outside",
-      textfont: { size: 10, color: "#9aa0aa" },
-      hovertemplate: "<b>%{y}</b> · %{x:+d} posiciones<extra></extra>",
-    }], baseLayout({
-      height: Math.max(360, g.length * 22 + 110),
-      margin: { l: 52, r: 60, t: 12, b: 40 },
-      xaxis: { ...baseLayout().xaxis, title: { text: "± POSICIONES", font: { size: 10 } },
-               zeroline: true, zerolinecolor: "rgba(255,255,255,.3)" },
-      yaxis: { ...baseLayout().yaxis, gridcolor: "rgba(0,0,0,0)", tickfont: { size: 10 } },
-    }), PLOTLY_CFG);
-  }
-
-  // heatmap de speed trap por vuelta
-  if (ss.trap) {
-    const cTr = chartCard({
-      title: "Speed trap por vuelta", sub: "velocidad punta de cada piloto en cada vuelta (km/h)",
-      summary: (() => { let mx = 0, quien = "";
-        ss.trap.drivers.forEach((c, i) => { const v = Math.max(...ss.trap.z[i].filter(Boolean));
-          if (v > mx) { mx = v; quien = c; } });
-        return `Récord del speed trap del grupo: ${mx.toFixed(0)} km/h de ${quien}.`; })(),
-      tips: ["<b>¿Una fila que se apaga (azul oscuro) al final?</b> → gestionaba o perdió motor/rebufo.",
-             "<b>¿Columna entera fría?</b> → vuelta lenta de todos: SC o lluvia.",
-             "<b>¿Una celda azul brillante aislada?</b> → rebufo perfecto o DRS en esa vuelta."],
+    const filasG = [...ss.grid].sort((a, b) => a.pos - b.pos);
+    const trazasG2 = [];
+    filasG.forEach((x) => {
+      trazasG2.push({ type: "scatter", mode: "lines", showlegend: false,
+        x: [x.grid, x.pos], y: [x.code, x.code],
+        line: { color: x.delta > 0 ? "rgba(46,204,113,.6)" : x.delta < 0 ? "rgba(255,82,82,.6)" : "rgba(120,130,145,.5)", width: 3 },
+        hoverinfo: "skip" });
+      trazasG2.push({ type: "scatter", mode: "markers", showlegend: false,
+        x: [x.grid], y: [x.code],
+        marker: { size: 9, color: "rgba(0,0,0,0)", line: { color: "#8a94a4", width: 1.5 } },
+        hovertemplate: `<b>${x.code}</b> · salida P%{x}<extra></extra>` });
+      trazasG2.push({ type: "scatter", mode: "markers", showlegend: false,
+        x: [x.pos], y: [x.code],
+        marker: { size: 10, color: (ss.evo.find((e) => e.code === x.code) || {}).color || "#9aa0aa",
+                  line: { color: "#11141b", width: 1.5 } },
+        hovertemplate: `<b>${x.code}</b> · meta P%{x}<extra></extra>` });
     });
-    Z.ritmo.appendChild(cTr.card);
-    Z.ritmo.appendChild(el(`<div style="height:18px"></div>`));
-    const planos = ss.trap.z.flat().filter((v) => v != null).sort((a, b) => a - b);
-    const zmin = planos[Math.floor(planos.length * 0.04)] || 0;
-    Plotly.newPlot(cTr.plot, [{
-      type: "heatmap", x: ss.trap.laps, y: ss.trap.drivers, z: ss.trap.z,
-      colorscale: [[0, "#081726"], [0.55, "#155d8f"], [1, "#2f9fdd"]],
-      hoverongaps: false, zmin, zmax: planos[planos.length - 1],
-      xgap: 2, ygap: 3,
-      texttemplate: "%{z:.0f}", textfont: { color: "#ffffff", size: 10.5,
-        family: "Inter Black, Inter, sans-serif" },
-      hovertemplate: "<b>%{y}</b> · V%{x}<br>%{z:.0f} km/h<extra></extra>",
-      colorbar: { thickness: 12, outlinewidth: 0,
-        tickfont: { size: 10, color: "#9aa0aa" } },
-    }], baseLayout({
-      height: Math.max(420, ss.trap.drivers.length * 46 + 150),
-      margin: { l: 56, r: 70, t: 14, b: 44 },
-      xaxis: { ...baseLayout().xaxis, title: { text: "VUELTA", font: { size: 10 } }, dtick: 2 },
+    Plotly.newPlot(cGr.plot, trazasG2, baseLayout({
+      height: chartHeight({ items: filasG.length, min: 220, max: 460, per: 34 }),
+      margin: { l: 52, r: 70, t: 12, b: 40 },
+      annotations: filasG.map((x) => ({
+        x: x.pos, y: x.code, xanchor: x.pos <= x.grid ? "right" : "left",
+        xshift: x.pos <= x.grid ? -12 : 12, showarrow: false,
+        text: `${x.delta > 0 ? "+" : ""}${x.delta}`,
+        font: { size: 10, color: x.delta > 0 ? "#2ECC71" : x.delta < 0 ? "#FF5252" : "#8a94a4" } })),
+      xaxis: { ...baseLayout().xaxis, title: { text: "POSICIÓN (P1 A LA IZQUIERDA)", font: { size: 10 } },
+               autorange: "reversed", dtick: 1, showgrid: true,
+               gridcolor: "rgba(255,255,255,.05)", griddash: "dot" },
       yaxis: { ...baseLayout().yaxis, autorange: "reversed", gridcolor: "rgba(0,0,0,0)",
                tickfont: { size: 11 } },
     }), PLOTLY_CFG);
+  }
+
+  // ── speed trap: solo vueltas COMPARABLES en la escala; SC/pit en gris
+  if (ss.trap) {
+    const pitSet = new Set();
+    (ss.pits || []).forEach((pp) => (pp.stops || []).forEach((st) => {
+      pitSet.add(pp.code + "|" + st.lap);
+      pitSet.add(pp.code + "|" + (st.lap + 1));
+    }));
+    const enSCt = (lap) => (ss.sc_ranges || []).some(([a, b]) => lap >= a && lap <= b);
+    const esValida = (code, lap) => !enSCt(lap) && !pitSet.has(code + "|" + lap);
+    const zV = ss.trap.drivers.map((c, i) => ss.trap.z[i].map((v, j) =>
+      (v != null && esValida(c, ss.trap.laps[j])) ? v : null));
+    const zExc = ss.trap.drivers.map((c, i) => ss.trap.z[i].map((v, j) =>
+      (v != null && !esValida(c, ss.trap.laps[j])) ? 1 : null));
+    const nExc = zExc.flat().filter((v) => v != null).length;
+    const medDe = (fila) => {
+      const v = fila.filter((x) => x != null).sort((a, b) => a - b);
+      return v.length ? v[Math.floor(v.length / 2)] : null;
+    };
+    const medianas = ss.trap.drivers.map((c, i) => ({ c, m: medDe(zV[i]) }));
+    let mejor = { v: 0, c: "" };
+    zV.forEach((fila, i) => fila.forEach((v) => {
+      if (v != null && v > mejor.v) mejor = { v, c: ss.trap.drivers[i] };
+    }));
+    const sumTrap = `${mejor.c} registró la mayor Vmax VÁLIDA: ${mejor.v.toFixed(0)} km/h. ` +
+      `Medianas válidas: ${medianas.filter((m2) => m2.m != null)
+        .map((m2) => `${m2.c} ${m2.m.toFixed(0)}`).join(" · ")} km/h. ` +
+      `${nExc} celdas excluidas de la escala por SC/VSC o pit.`;
+
+    const cTr = chartCard({
+      title: "Speed trap por vuelta",
+      sub: "velocidad punta por vuelta · solo vueltas COMPARABLES colorean la escala · gris = SC/VSC o pit",
+      summary: sumTrap,
+      legendHtml: `<div class="pills" style="padding:0 18px 10px">
+        <button class="pill" data-tm="abs">ABSOLUTA</button>
+        <button class="pill" data-tm="med">VS SU MEDIANA</button>
+        ${ss.trap.drivers.length === 2 ? `<button class="pill" data-tm="duel">ENTRE PILOTOS</button>` : ""}</div>`,
+      tips: ["<b>¿Una fila que se apaga al final?</b> → gestionaba o perdió rebufo; verifica que no sean celdas grises (no comparables).",
+             "VS SU MEDIANA responde: ¿esta vuelta tuvo una punta inusual PARA ESE PILOTO? — mejor que la absoluta para encontrar diferencias.",
+             "Un pico aislado puede venir de rebufo, aerodinámica activa en modo recta, despliegue eléctrico o viento: la gráfica sola no identifica la causa.",
+             "Solo se rotulan los máximos de cada piloto; el resto vive en el hover."],
+    });
+    Z.ritmo.appendChild(cTr.card);
+    Z.ritmo.appendChild(el(`<div style="height:18px"></div>`));
+
+    const dibujaTrap = () => {
+      const modo = state.trapModo || "abs";
+      cTr.card.querySelectorAll("[data-tm]").forEach((b) =>
+        b.classList.toggle("active", b.dataset.tm === modo));
+      const capaGris = { type: "heatmap", x: ss.trap.laps, y: ss.trap.drivers, z: zExc,
+        colorscale: [[0, "#343b45"], [1, "#343b45"]], showscale: false,
+        hoverongaps: false, xgap: 2, ygap: 3,
+        hovertemplate: "<b>%{y}</b> · V%{x}<br>no comparable (SC/VSC o pit)<extra></extra>" };
+      let capa, anots = [];
+      if (modo === "med") {
+        const zM = zV.map((fila, i) => fila.map((v) =>
+          v != null && medianas[i].m != null ? +(v - medianas[i].m).toFixed(1) : null));
+        const mx = Math.max(...zM.flat().filter((v) => v != null).map(Math.abs), 1);
+        capa = { z: zM, zmin: -mx, zmax: mx,
+          colorscale: [[0, "#E0243F"], [0.5, "#39424e"], [1, "#38bdf8"]],
+          barTitulo: "Δ VS SU MEDIANA",
+          hover: "<b>%{y}</b> · V%{x}<br>%{z:+.0f} km/h vs su mediana<extra></extra>" };
+      } else if (modo === "duel" && ss.trap.drivers.length === 2) {
+        const dif = ss.trap.laps.map((_, j) =>
+          (zV[0][j] != null && zV[1][j] != null) ? +(zV[0][j] - zV[1][j]).toFixed(1) : null);
+        const mx = Math.max(...dif.filter((v) => v != null).map(Math.abs), 1);
+        capa = { z: [dif], y: [`${ss.trap.drivers[0]} − ${ss.trap.drivers[1]}`],
+          zmin: -mx, zmax: mx,
+          colorscale: [[0, "#E0243F"], [0.5, "#39424e"], [1, "#38bdf8"]],
+          barTitulo: "Δ KM/H",
+          hover: "V%{x} · %{z:+.0f} km/h<extra></extra>" };
+      } else {
+        const planos = zV.flat().filter((v) => v != null).sort((a, b) => a - b);
+        capa = { z: zV,
+          zmin: planos[Math.floor(planos.length * 0.04)] || 0,
+          zmax: planos[planos.length - 1],
+          colorscale: [[0, "#081726"], [0.55, "#155d8f"], [1, "#2f9fdd"]],
+          barTitulo: "KM/H",
+          hover: "<b>%{y}</b> · V%{x}<br>%{z:.0f} km/h<extra></extra>" };
+        // solo se rotulan los máximos por piloto (104 números eran ruido)
+        zV.forEach((fila, i) => {
+          let jMax = -1;
+          fila.forEach((v, j) => { if (v != null && (jMax < 0 || v > fila[jMax])) jMax = j; });
+          if (jMax >= 0) anots.push({ x: ss.trap.laps[jMax], y: ss.trap.drivers[i],
+            text: fila[jMax].toFixed(0), showarrow: false,
+            font: { size: 10, color: "#fff", family: "Inter Black, Inter, sans-serif" } });
+        });
+      }
+      const filasN = capa.y ? 1 : ss.trap.drivers.length;
+      Plotly.react(cTr.plot, [
+        ...(modo === "duel" ? [] : [capaGris]),
+        { type: "heatmap", x: ss.trap.laps, y: capa.y || ss.trap.drivers, z: capa.z,
+          colorscale: capa.colorscale, zmin: capa.zmin, zmax: capa.zmax,
+          hoverongaps: false, xgap: 2, ygap: 3,
+          hovertemplate: capa.hover,
+          colorbar: { thickness: 12, outlinewidth: 0,
+            title: { text: capa.barTitulo, font: { size: 9.5, color: "#8a94a4" } },
+            tickfont: { size: 10, color: "#9aa0aa" } } },
+      ], baseLayout({
+        height: Math.max(230, filasN * 46 + 150),
+        margin: { l: 100, r: 70, t: 14, b: 44 },
+        annotations: anots,
+        xaxis: { ...baseLayout().xaxis, title: { text: "VUELTA", font: { size: 10 } }, dtick: 2 },
+        yaxis: { ...baseLayout().yaxis, autorange: "reversed", gridcolor: "rgba(0,0,0,0)",
+                 tickfont: { size: 11 } },
+      }), PLOTLY_CFG);
+    };
+    cTr.card.querySelectorAll("[data-tm]").forEach((b) => {
+      b.onclick = () => { state.trapModo = b.dataset.tm; dibujaTrap(); };
+    });
+    dibujaTrap();
   }
 
   // TIEMPOS POR VUELTA (TABLA) — desplegable
@@ -3297,13 +3461,18 @@ function linfit(xs, ys) {
 }
 
 function cardMuroPits({ rows, summary, sub }) {
+  // escala ABSOLUTA: todas las filas comparten el eje 1..L (vuelta total)
+  const L = Math.max(...rows.map((r) =>
+    r.segs.length ? (r.segs[r.segs.length - 1].to || 0) : 0), 1);
   const filas = rows.map((r) => {
     const strip = r.segs.map((sg, i) => {
       const laps = sg.laps ?? (sg.to - sg.from + 1);
       const stop = r.stops && r.stops[i];
+      const left = (((sg.from - 1) / L) * 100).toFixed(2);
+      const width = ((laps / L) * 100).toFixed(2);
       const badge = (i < r.segs.length - 1)
-        ? `<span class="pit-badge" title="Parada en la vuelta ${sg.to}${stop && stop.lost != null ? ` · ~${stop.lost.toFixed(1)}s perdidos` : ""}">V${sg.to}${stop && stop.lost != null ? `<small>+${stop.lost.toFixed(1)}s</small>` : ""}</span>` : "";
-      return `<span class="stint-seg" style="--cc:${sg.color};flex-grow:${laps}"
+        ? `<span class="pit-badge" style="left:${((sg.to / L) * 100).toFixed(2)}%" title="Parada en la vuelta ${sg.to}${stop && stop.lost != null ? ` · ~${stop.lost.toFixed(1)}s de pérdida estimada` : " · pérdida no medible (SC/VSC o sin dato)"}">V${sg.to}${stop && stop.lost != null ? `<small>+${stop.lost.toFixed(1)}s</small>` : ""}</span>` : "";
+      return `<span class="stint-seg" style="--cc:${sg.color};left:${left}%;width:${width}%"
         title="${sg.compound} · V${sg.from}-V${sg.to} (${laps} vueltas)${sg.extraTitle || ""}">
         <i></i><b>${sg.compound[0]}</b> ${laps}v ${sg.degTxt || ""}</span>${badge}`;
     }).join("");
@@ -3316,7 +3485,7 @@ function cardMuroPits({ rows, summary, sub }) {
   }).join("");
   return el(`<div class="card chart-card keep-card" style="margin-bottom:20px">
     <div class="chart-head"><h2>Pits y estrategia</h2>
-      <span class="sub">${sub || "ancho del bloque = vueltas del stint · V## = vuelta de parada · +s = tiempo perdido vs sus vueltas limpias"}</span></div>
+      <span class="sub">${sub || "eje común de vueltas: V## queda alineado entre pilotos · +s = pérdida ESTIMADA en la parada"}</span></div>
     <div style="padding:10px 18px 4px">${filas}</div>
     <div class="compound-legend" style="margin-top:6px">${Object.entries(COMP_COLORS).map(([k, v]) =>
       `<span class="chip" style="--cc:${v}"><i></i>${k}</span>`).join("")}</div>
@@ -3325,6 +3494,8 @@ function cardMuroPits({ rows, summary, sub }) {
       <li><b>¿Paró antes que su rival directo?</b> → intento de undercut: goma nueva para atacar en las vueltas siguientes.</li>
       <li><b>¿Bloque largo al final?</b> → estiró el stint (overcut) o apostó a un SC tardío.</li>
       <li><b>¿+s alto en una parada?</b> → parada lenta o tráfico al salir; posiciones perdidas sin pelear.</li>
+      <li>DEFINICIÓN de la pérdida: (vuelta de entrada + vuelta de salida) − 2× su mediana de vueltas limpias. Es una ESTIMACIÓN; las paradas bajo SC/VSC no son medibles ni comparables con paradas en verde.</li>
+      <li>Una pendiente negativa dentro del stint no es automáticamente 'buena': puede ser combustible, evolución de pista o calentamiento.</li>
       <li>Pasa el cursor por bloques y badges para el detalle exacto.</li>
     </ul></details></div>`);
 }
