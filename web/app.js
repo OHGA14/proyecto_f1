@@ -1625,6 +1625,13 @@ function drawSessionStatsInner(Z, ss, rerender) {
         <div class="value">${rapido.code}</div><div class="hint">${rapido.median_label} · ${rapido.laps} vueltas limpias</div></div>
       <div class="card tile" style="--tc:${consistente.color}"><div class="label">Más consistente</div>
         <div class="value">${consistente.code}</div><div class="hint">CV ${consistente.cv.toFixed(2)}% · σ ${consistente.sigma.toFixed(3)}s</div></div>
+      ${(() => {
+        const ord2 = [...ss.cv].sort((a, b) => a.median - b.median);
+        if (ord2.length < 2) return "";
+        const dif = ord2[1].median - ord2[0].median;
+        return `<div class="card tile" style="--tc:${ord2[1].color}"><div class="label">Diferencia</div>
+        <div class="value">+${dif.toFixed(3)}s</div><div class="hint">${ord2[1].code} vs ${ord2[0].code} · por vuelta (mediana)</div></div>`;
+      })()}
       <div class="card tile"><div class="label">Vueltas de la sesión</div>
         <div class="value">${ss.n_laps}</div><div class="hint">${ss.type === "race" ? "carrera" : ss.type === "quali" ? "clasificación" : "práctica"}</div></div>
     </div>`));
@@ -1772,9 +1779,10 @@ function drawSessionStatsInner(Z, ss, rerender) {
     const orden = [...ss.box].sort((a, b) => med(a.times) - med(b.times));
     const cBox = chartCard({
       title: "Distribución de ritmo",
-      sub: "ordenado por mediana · cada punto = una vuelta limpia · línea punteada = promedio",
-      tips: ["<b>¿Caja pequeña?</b> → piloto metrónomo: casi todas sus vueltas son iguales.",
-             "<b>¿Caja baja pero larga?</b> → rápido pero irregular; la mediana (línea central) es su ritmo real.",
+      sub: "horizontal: más a la IZQUIERDA = más rápido · el más veloz arriba · cada punto = una vuelta limpia",
+      tips: ["<b>¿Caja más a la izquierda?</b> → ese piloto rueda más rápido; los tiempos se leen como en una recta de meta.",
+             "<b>¿Caja corta?</b> → piloto metrónomo: casi todas sus vueltas son iguales.",
+             "<b>¿Caja adelantada pero larga?</b> → rápido pero irregular; la mediana (línea central) es su ritmo real.",
              "<b>¿Puntos sueltos lejos de la caja?</b> → vueltas raras que sobrevivieron al filtro: tráfico o goma muerta.",
              "Comparar MEDIANAS es más honesto que comparar la mejor vuelta."],
     });
@@ -1782,7 +1790,7 @@ function drawSessionStatsInner(Z, ss, rerender) {
     Z.ritmo.appendChild(el(`<div style="height:20px"></div>`));
     const tt = timeTicks(ss.box.flatMap((b) => b.times));
     Plotly.newPlot(cBox.plot, orden.map((b) => ({
-      type: "box", y: b.times, name: b.code,
+      type: "box", x: b.times, name: b.code,
       boxpoints: "all", jitter: 0.55, pointpos: 0, boxmean: true, width: 0.55,
       marker: { color: rgba(b.color, 0.4), size: 3.8 },
       line: { color: b.color, width: 2.2 },
@@ -1790,16 +1798,17 @@ function drawSessionStatsInner(Z, ss, rerender) {
       customdata: b.times.map(fmtLap),
       hovertemplate: `<b>${b.code}</b> · %{customdata}<extra></extra>`,
     })), baseLayout({
-      height: chartHeight({ items: ss.box.length, min: 340, max: 620, per: 52 }),
+      height: chartHeight({ items: ss.box.length, min: 300, max: 640, per: 48 }),
       showlegend: false,
       annotations: orden.map((b) => ({
-        x: b.code, y: med(b.times), yshift: 16, showarrow: false,
+        y: b.code, x: med(b.times), yshift: 25, showarrow: false,
         text: fmtLap(med(b.times)),
         font: { size: 10.5, color: b.color, family: "Inter" },
       })),
-      margin: { l: 64, r: 14, t: 26, b: 44 },
-      xaxis: { ...baseLayout().xaxis, tickfont: { size: 11.5 } },
-      yaxis: { ...baseLayout().yaxis, ...tt },
+      margin: { l: 64, r: 14, t: 8, b: 44 },
+      xaxis: { ...baseLayout().xaxis, ...tt, tickfont: { size: 11 } },
+      yaxis: { ...baseLayout().yaxis, autorange: "reversed", gridcolor: "rgba(0,0,0,0)",
+               tickfont: { size: 11.5 } },
     }), PLOTLY_CFG);
   }
 
@@ -1819,21 +1828,6 @@ function drawSessionStatsInner(Z, ss, rerender) {
       <table><thead><tr><th>Piloto</th><th class="num">Vueltas</th><th class="num">Mediana</th>
       <th class="num">σ</th><th class="num">IQR</th><th class="num">CV</th></tr></thead>
       <tbody>${rows}</tbody></table></div>`));
-  }
-
-  // RESUMEN DE RITMO: tarjetas por piloto (vueltas limpias)
-  if (ss.cv.length) {
-    const mejor = Math.min(...ss.cv.map((r) => r.median));
-    Z.resumen.appendChild(el(`<div class="section-title">Resumen de ritmo
-      <small> · vueltas limpias por piloto (sin pits ni atípicas)</small></div>`));
-    const cards = [...ss.cv].sort((a, b) => a.median - b.median).map((r) => `
-      <div class="card tile" style="--tc:${r.color}">
-        <div class="label">${r.code}</div>
-        <div class="value" style="font-size:23px">${r.median_label}</div>
-        <div class="hint">${r.median === mejor ? "MEJOR RITMO" : `+${(r.median - mejor).toFixed(3)}s vs mejor`}
-          · ${r.laps} vueltas<br>σ ${r.sigma.toFixed(3)} · IQR ${r.iqr.toFixed(3)}</div>
-      </div>`).join("");
-    Z.resumen.appendChild(el(`<div class="tiles" style="margin-bottom:20px">${cards}</div>`));
   }
 
   // ritmo corregido por combustible (solo carrera) con slider
@@ -2002,9 +1996,9 @@ function drawSessionStatsInner(Z, ss, rerender) {
         ss.trap.drivers.forEach((c, i) => { const v = Math.max(...ss.trap.z[i].filter(Boolean));
           if (v > mx) { mx = v; quien = c; } });
         return `Récord del speed trap del grupo: ${mx.toFixed(0)} km/h de ${quien}.`; })(),
-      tips: ["<b>¿Una fila que se enfría (azul) al final?</b> → gestionaba o perdió motor/rebufo.",
+      tips: ["<b>¿Una fila que se apaga (azul oscuro) al final?</b> → gestionaba o perdió motor/rebufo.",
              "<b>¿Columna entera fría?</b> → vuelta lenta de todos: SC o lluvia.",
-             "<b>¿Un punto rojo aislado?</b> → rebufo perfecto o DRS en esa vuelta."],
+             "<b>¿Una celda azul brillante aislada?</b> → rebufo perfecto o DRS en esa vuelta."],
     });
     Z.ritmo.appendChild(cTr.card);
     Z.ritmo.appendChild(el(`<div style="height:18px"></div>`));
@@ -2012,7 +2006,8 @@ function drawSessionStatsInner(Z, ss, rerender) {
     const zmin = planos[Math.floor(planos.length * 0.04)] || 0;
     Plotly.newPlot(cTr.plot, [{
       type: "heatmap", x: ss.trap.laps, y: ss.trap.drivers, z: ss.trap.z,
-      colorscale: "Turbo", hoverongaps: false, zmin, zmax: planos[planos.length - 1],
+      colorscale: [[0, "#081726"], [0.55, "#155d8f"], [1, "#2f9fdd"]],
+      hoverongaps: false, zmin, zmax: planos[planos.length - 1],
       xgap: 2, ygap: 3,
       texttemplate: "%{z:.0f}", textfont: { color: "#ffffff", size: 10.5,
         family: "Inter Black, Inter, sans-serif" },
@@ -2263,18 +2258,23 @@ async function viewEquipos() {
     // B) probabilidades del Monte Carlo
     const cB = chartCard({
       title: "Probabilidades · 4,000 carreras simuladas",
-      sub: "barra sólida = ser el más rápido · barra tenue = terminar en el top 3",
-      tips: ["Se corren 4,000 carreras sembrando a cada equipo con su ruido REAL (su irregularidad medida) y se cuenta cuántas gana cada uno.",
+      sub: "barra sólida = ser el más rápido · barra tenue = terminar en el top 3 · solo equipos con ≥1% de opciones",
+      tips: ["Los equipos que no aparecen rondan el 0% de probabilidad en la simulación: mostrarlos solo estira la gráfica.",
+             "Se corren 4,000 carreras sembrando a cada equipo con su ruido REAL (su irregularidad medida) y se cuenta cuántas gana cada uno.",
              "<b>Probabilidad no es destino:</b> 40% significa que en 6 de cada 10 simulaciones ganó OTRO equipo.",
              "<b>¿Sólida corta pero tenue larga?</b> → no le da para ganar, pero es candidato firme al podio de ritmo.",
              "La VALIDACIÓN del resumen mide la honestidad del modelo contra las carreras ya corridas."],
     });
     rowP.appendChild(cB.card);
-    const tB = [...pred.teams].sort((a, b) => a.p_win - b.p_win || a.p_top3 - b.p_top3);
+    // solo equipos con opciones reales (≥1% al top 3): diez barras en 0% no informan
+    const tB = pred.teams.filter((t) => t.p_top3 >= 0.01)
+      .sort((a, b) => a.p_win - b.p_win || a.p_top3 - b.p_top3);
     Plotly.newPlot(cB.plot, [
       { type: "bar", orientation: "h", name: "TOP 3",
         y: tB.map((t) => t.team), x: tB.map((t) => t.p_top3 * 100),
         marker: { color: tB.map((t) => rgba(t.color, 0.3)), line: { color: "#11141b", width: 1 } },
+        text: tB.map((t) => ` ${(t.p_top3 * 100).toFixed(0)}% `), textposition: "outside",
+        textfont: { size: 9.5, color: "#77839a" },
         hovertemplate: "<b>%{y}</b> · %{x:.0f}% de terminar en el top 3<extra></extra>" },
       { type: "bar", orientation: "h", name: "MÁS RÁPIDO",
         y: tB.map((t) => t.team), x: tB.map((t) => t.p_win * 100),
@@ -2283,7 +2283,7 @@ async function viewEquipos() {
         textfont: { size: 10, color: "#9aa0aa" },
         hovertemplate: "<b>%{y}</b> · %{x:.0f}% de ser el más rápido<extra></extra>" },
     ], baseLayout({
-      height: Math.max(420, tB.length * 40 + 130), barmode: "group", bargap: 0.25,
+      height: Math.max(360, tB.length * 44 + 130), barmode: "group", bargap: 0.25,
       margin: { l: 110, r: 52, t: 14, b: 46 },
       xaxis: { ...baseLayout().xaxis, title: { text: "PROBABILIDAD (%)", font: { size: 10 } },
                range: [0, 106], ticksuffix: "%" },

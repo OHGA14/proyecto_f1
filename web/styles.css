@@ -225,7 +225,12 @@ body {
 .chip i { width: 8px; height: 8px; border-radius: 2px; background: var(--cc, #9aa0aa); }
 
 /* podio hero */
-.podium-hero { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.podium-hero { display: grid; grid-template-columns: 1.35fr 1fr 1fr; gap: 14px; align-items: stretch; }
+/* el ganador DOMINA: tarjeta más ancha, código más grande, borde con su color */
+.podium-hero .pod:first-child { padding: 26px 24px; border-color: color-mix(in srgb, var(--tc) 45%, var(--border)); }
+.podium-hero .pod:first-child .code { font-size: 40px; }
+.podium-hero .pod:first-child .name { font-size: 14px; }
+.podium-hero .pod:first-child .pos { font-size: 16px; }
 @media (max-width: 760px) { .podium-hero { grid-template-columns: 1fr; } }
 .pod {
   position: relative; overflow: hidden; padding: 16px 18px;
