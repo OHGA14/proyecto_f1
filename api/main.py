@@ -89,11 +89,14 @@ def get_tel_schedule(year: int):
 
 
 @app.get("/api/telemetry/analysis")
-def get_tel_analysis(sid: str, drivers: str = "", lap: int | None = None):
+def get_tel_analysis(sid: str, drivers: str = "", lap: int | None = None,
+                     segment: str | None = None):
     """Análisis de vuelta: canales por distancia, delta, G-G, fases, mapa,
-    DTW, micro-sectores, sectores y zonas. `lap` = vuelta específica (opcional)."""
+    DTW, micro-sectores, sectores y zonas. `lap` = vuelta específica;
+    `segment` = Q1/Q2/Q3 para acotar la vuelta rápida en qualy."""
     codes = [c.strip().upper() for c in drivers.split(",") if c.strip()] or None
-    out = telemetry.analysis(sid, codes, lap)
+    seg = segment.upper() if segment and segment.upper() in ("Q1", "Q2", "Q3") else None
+    out = telemetry.analysis(sid, codes, lap, seg)
     if out is None:
         raise HTTPException(409, f"La sesión {sid} no está cargada (usa /api/telemetry/load).")
     return out

@@ -717,8 +717,10 @@ async function viewAnalisis() {
     const ev = evs.find((e) => e.gp === state.telGp) || evs[evs.length - 1];
     if (!ev) { selSes.innerHTML = ""; return; }
     state.telGp = ev.gp;
-    if (!ev.sessions.some((x) => x.session === state.telSes))
+    if (!ev.sessions.some((x) => x.session === state.telSes)) {
       state.telSes = (ev.sessions.find((x) => x.session === "Race") || ev.sessions[ev.sessions.length - 1]).session;
+      state.telSeg = null;
+    }
     selSes.innerHTML = ev.sessions.map((x) =>
       `<option value="${x.session}" ${x.session === state.telSes ? "selected" : ""}>${x.session}${x.cached ? " ●" : ""}</option>`).join("");
   };
@@ -738,7 +740,7 @@ async function viewAnalisis() {
   };
   selYear.onchange = () => { state.telYear = +selYear.value; state.telGp = null; state.telSes = null; fillGp(); };
   selGp.onchange = () => { state.telGp = selGp.value; state.telSes = null; fillSes(state.schedCache[state.telYear].events); };
-  selSes.onchange = () => { state.telSes = selSes.value; };
+  selSes.onchange = () => { state.telSes = selSes.value; state.telSeg = null; };
   controls.querySelector("#btnLoad").onclick = () => {
     state.tsid = `${state.telYear}|${state.telGp}|${state.telSes}`;
     state.telSel = null;
@@ -798,8 +800,10 @@ async function renderAnalysis(zone) {
 async function renderPilotos(zone) {
   zone.innerHTML = "";
   zone.appendChild(el(`<div class="skeleton-block" style="height:380px"></div>`));
+  const esQualy = /Qualifying|Shootout/.test(state.telSes || "");
   const q = (state.telSel && state.telSel.length ? `&drivers=${state.telSel.join(",")}` : "")
-          + (state.telLap ? `&lap=${state.telLap}` : "");
+          + (state.telLap ? `&lap=${state.telLap}` : "")
+          + (esQualy && state.telSeg && !state.telLap ? `&segment=${state.telSeg}` : "");
   const [d, ss] = await Promise.all([
     api(`/telemetry/analysis?sid=${encodeURIComponent(state.tsid)}${q}`),
     api(`/telemetry/sessionstats?sid=${encodeURIComponent(state.tsid)}`),
@@ -818,7 +822,7 @@ async function renderPilotos(zone) {
     <div>
       <div class="kicker">SESSION ANALYSIS${ronda ? ` / R${ronda}` : ""} · ${state.telYear}</div>
       <h3>${banderaGP(state.telGp)} ${state.telGp.replace(" Grand Prix", "")}</h3>
-      <div class="meta">${state.telSes} · ${d.drivers.length} coches en análisis · referencia ${d.ref}</div>
+      <div class="meta">${state.telSes}${d.segment ? " · SOLO " + d.segment : ""} · ${d.drivers.length} coches en análisis · referencia ${d.ref}</div>
     </div>
     <div class="status"><i></i>DATA READY</div>
   </div>`));
@@ -831,6 +835,11 @@ async function renderPilotos(zone) {
         <button class="pill" data-top="3">TOP 3</button>
         <button class="pill" data-top="5">TOP 5</button>
         <button class="pill" data-top="10">TOP 10</button>
+        ${esQualy ? `<span style="width:10px"></span>
+        <button class="pill ${!state.telSeg ? "active" : ""}" data-seg="">TODA LA QUALY</button>
+        <button class="pill ${state.telSeg === "Q1" ? "active" : ""}" data-seg="Q1">Q1</button>
+        <button class="pill ${state.telSeg === "Q2" ? "active" : ""}" data-seg="Q2">Q2</button>
+        <button class="pill ${state.telSeg === "Q3" ? "active" : ""}" data-seg="Q3">Q3</button>` : ""}
         <select id="lapMode" style="padding:6px 30px 6px 10px;font-size:12px">
           <option value="">VUELTA RÁPIDA</option><option value="n">VUELTA Nº…</option></select>
         <input type="number" id="lapN" min="1" placeholder="nº" style="width:70px;display:${state.telLap ? "" : "none"};background:var(--card2);color:var(--ink);border:1px solid var(--border);border-radius:8px;padding:7px 8px;font:inherit">
@@ -839,6 +848,13 @@ async function renderPilotos(zone) {
   chipsCard.querySelectorAll("[data-top]").forEach((b) => {
     b.onclick = () => {
       state.telSel = (d.available || []).slice(0, +b.dataset.top).map((x) => x.code);
+      renderPilotos(zone);
+    };
+  });
+  chipsCard.querySelectorAll("[data-seg]").forEach((b) => {
+    b.onclick = () => {
+      state.telSeg = b.dataset.seg || null;
+      state.telLap = null;          // el segmento aplica a la vuelta RÁPIDA
       renderPilotos(zone);
     };
   });

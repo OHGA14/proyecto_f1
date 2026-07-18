@@ -156,14 +156,33 @@ def _downsample(arr, step, nd=None):
 
 # ────────────────────────────────────────────── análisis de vuelta rápida
 
-def _lap_channels(sid, code, lap_number=None):
-    """Canales de una vuelta de un piloto (rápida si lap_number=None). Cacheado."""
-    key = (sid, code, lap_number)
+def _segment_laps(s, segment):
+    """Vueltas de un segmento de qualy (Q1/Q2/Q3) — para FastF1 la qualy es
+    UNA sesión; los segmentos se separan con split_qualifying_sessions."""
+    try:
+        partes = s.laps.split_qualifying_sessions()
+        idx = {"Q1": 0, "Q2": 1, "Q3": 2}[segment]
+        seg = partes[idx] if idx < len(partes) else None
+        return seg if seg is not None and len(seg) else None
+    except Exception:
+        return None
+
+
+def _lap_channels(sid, code, lap_number=None, segment=None):
+    """Canales de una vuelta de un piloto (rápida si lap_number=None;
+    `segment` acota la vuelta rápida a Q1/Q2/Q3 en qualy). Cacheado."""
+    key = (sid, code, lap_number, segment)
     if key in _TEL_CACHE:
         return _TEL_CACHE[key]
     s = _ready_session(sid)
+    fuente = s.laps
+    if segment and lap_number is None:
+        seg = _segment_laps(s, segment)
+        if seg is None:
+            return None
+        fuente = seg
     mode = "Vuelta Rápida" if lap_number is None else "manual"
-    lap, _why = get_selected_lap(s.laps, code, mode, lap_number)
+    lap, _why = get_selected_lap(fuente, code, mode, lap_number)
     if lap is None:
         return None
     tel = lap.get_telemetry().add_distance()
@@ -261,8 +280,9 @@ def laps_of(sid, code):
     return sorted(out, key=lambda o: o["lap"])
 
 
-def analysis(sid, codes=None, lap=None):
-    """Modo PILOTOS: vuelta rápida (o la vuelta `lap`) de cada piloto."""
+def analysis(sid, codes=None, lap=None, segment=None):
+    """Modo PILOTOS: vuelta rápida (o la vuelta `lap`) de cada piloto;
+    `segment` (Q1/Q2/Q3) acota la vuelta rápida a ese segmento de qualy."""
     s = _ready_session(sid)
     if s is None:
         return None
@@ -275,13 +295,14 @@ def analysis(sid, codes=None, lap=None):
     nombres = {d["code"]: d["name"] for d in disponibles}
     entries = []
     for c in codes:
-        ch = _lap_channels(sid, c, lap)
+        ch = _lap_channels(sid, c, lap, segment)
         if ch is not None:
             entries.append({"key": c, "name": nombres.get(c, c),
                             "color": colores.get(c, "#9aa0aa"), "ch": ch})
     out = _assemble(s, entries)
     out["available"] = disponibles
     out["mode"] = "pilotos"
+    out["segment"] = segment
     return out
 
 
