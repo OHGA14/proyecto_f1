@@ -687,10 +687,30 @@ def team_evolution(year, source="quali"):
                 T95 = {1: 12.71, 2: 4.30, 3: 3.18, 4: 2.78, 5: 2.57,
                        6: 2.45, 7: 2.36, 8: 2.31, 9: 2.26, 10: 2.23}
                 tcrit = T95.get(n_o - 2, 2.09 if n_o - 2 < 30 else 1.96)
+                # proyección LATENTE + intervalo predictivo 80% (el recentrado
+                # contra el mejor se hace GLOBALMENTE después: recortar a cada
+                # equipo en 0 destruía las diferencias relativas)
+                x_next = max(rlist) + 1
+                s_res = float(np.sqrt(max(ss_res, 0.0) / max(n_o - 2, 1)))
+                se_pred = (s_res * float(np.sqrt(1 + 1 / n_o
+                           + (x_next - float(x.mean())) ** 2 / sxx))
+                           if sxx > 0 and n_o > 2 else 0.0)
+                T80 = {1: 3.08, 2: 1.89, 3: 1.64, 4: 1.53, 5: 1.48,
+                       6: 1.44, 7: 1.42, 8: 1.40, 9: 1.38, 10: 1.37}
+                t80 = T80.get(n_o - 2, 1.34 if n_o - 2 < 30 else 1.28)
                 item.update(slope=round(float(b1), 4), r2=round(r2, 3),
                             se=round(se, 4), ci=round(tcrit * se, 4),
-                            proy=round(max(0.0, float(b0 + b1 * (max(rlist) + 1))), 3))
+                            proy_raw=round(float(b0 + b1 * x_next), 3),
+                            proy_ip=round(t80 * se_pred, 3))
             teams.append(item)
+
+        # BASELINE: recentrado GLOBAL contra el mejor proyectado — el mejor
+        # queda en 0 y se conservan TODAS las diferencias relativas
+        con_proy = [t for t in teams if "proy_raw" in t]
+        if con_proy:
+            mn_proy = min(t["proy_raw"] for t in con_proy)
+            for t in con_proy:
+                t["proy"] = round(t["proy_raw"] - mn_proy, 3)
 
         # convergencia: σ (muestral) del déficit por ronda + tendencia lineal
         disp = base.groupby("round")["deficit"].std().dropna()
@@ -785,8 +805,8 @@ def team_evolution(year, source="quali"):
                               f"con el circuito.")
             proys = sorted((t for t in con_pend if "proy" in t), key=lambda t: t["proy"])[:3]
             if proys:
-                partes.append("PROYECCIÓN R" + str(max(rlist) + 1) + " (recta simple, "
-                              "baseline): "
+                partes.append("BASELINE LINEAL R" + str(max(rlist) + 1)
+                              + " (referencia sin efecto circuito): "
                               + " · ".join(f"{t['team']} {t['proy']:.2f} pp" for t in proys)
                               + ".")
             resumen = partes

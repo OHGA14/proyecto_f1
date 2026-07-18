@@ -3809,6 +3809,60 @@ async function viewEquipos() {
                showgrid: true, gridcolor: "rgba(255,255,255,.05)", griddash: "dot" },
       yaxis: { ...baseLayout().yaxis, gridcolor: "rgba(0,0,0,0)", tickfont: { size: 11 } },
     }), PLOTLY_CFG);
+
+    // BASELINE LINEAL: la extrapolación de esas rectas, recentrada y con IP 80%
+    const conProy = conSlope.filter((t) => t.proy != null);
+    if (conProy.length) {
+      const cP = chartCard({
+        title: `Baseline lineal · Ronda ${d.next_round}`,
+        sub: "extrapolación de la recta de cada equipo, RECENTRADA contra el mejor · punto = central · barra = intervalo predictivo 80% · sin efecto circuito",
+        tips: ["Es la VARA DE MEDIR del modelo de predicción de arriba: si el modelo completo no le gana, no vale su complejidad.",
+               "El mejor queda en 0 por recentrado GLOBAL: ya no se recorta a cada equipo en cero (eso destruía las diferencias relativas entre los rápidos).",
+               "Sin intervalos, 0.00 y 0.04 parecían seguros; con ellos se ve el traslape. NO es una clasificación esperada.",
+               "Una recta supone mejorar o empeorar eternamente al mismo ritmo: una pendiente grande extrapola dinámicas absurdas — úsala como referencia, no como expectativa."],
+      });
+      $view.appendChild(cP.card);
+      $view.appendChild(el(`<div style="height:20px"></div>`));
+      const badgeP = el(`<div class="chart-summary warn">BASELINE · referencia lineal sin efecto circuito ni condiciones de sesión; interpretar con sus intervalos.</div>`);
+      cP.card.insertBefore(badgeP, cP.card.querySelector(".chart-guide"));
+      const vistaP = el(`<div class="pills" style="padding:0 18px 10px">
+        <button class="pill active" data-v="cont">CONTENDIENTES · 0-1.5 PP</button>
+        <button class="pill" data-v="todo">TODO EL CAMPO</button></div>`);
+      cP.card.insertBefore(vistaP, badgeP);
+      const ordP = [...conProy].sort((a, b) => a.proy - b.proy);
+      const dibujaBase = (rango) => {
+        Plotly.react(cP.plot, [{
+          type: "scatter", mode: "markers",
+          y: ordP.map((t) => t.team), x: ordP.map((t) => t.proy),
+          error_x: { type: "data", array: ordP.map((t) => t.proy_ip || 0),
+                     color: "rgba(148,163,184,.5)", thickness: 1.4, width: 5 },
+          marker: { size: 10, color: ordP.map((t) => t.color),
+                    line: { color: "#11141b", width: 1.5 } },
+          customdata: ordP.map((t) => [(t.proy_ip || 0).toFixed(2)]),
+          hovertemplate: "<b>%{y}</b> · %{x:.2f} pp sobre el mejor<br>IP 80%: ±%{customdata[0]} pp<extra></extra>",
+          showlegend: false,
+        }], baseLayout({
+          height: chartHeight({ items: ordP.length, min: 300, max: 520, per: 34 }),
+          margin: { l: 110, r: 30, t: 12, b: 46 },
+          shapes: [{ type: "line", x0: 0, x1: 0, yref: "paper", y0: 0, y1: 1,
+                     line: { color: "rgba(255,255,255,.3)", dash: "dash", width: 1 } }],
+          xaxis: { ...baseLayout().xaxis,
+                   title: { text: "PP SOBRE EL MEJOR PROYECTADO · IP 80%", font: { size: 10 } },
+                   ...(rango ? { range: rango, autorange: false } : { autorange: true }),
+                   showgrid: true, gridcolor: "rgba(255,255,255,.05)", griddash: "dot" },
+          yaxis: { ...baseLayout().yaxis, autorange: "reversed",
+                   gridcolor: "rgba(0,0,0,0)", tickfont: { size: 11 } },
+        }), PLOTLY_CFG);
+      };
+      vistaP.querySelectorAll("[data-v]").forEach((b) => {
+        b.onclick = () => {
+          vistaP.querySelectorAll(".pill").forEach((p) => p.classList.remove("active"));
+          b.classList.add("active");
+          dibujaBase(b.dataset.v === "cont" ? [-0.15, 1.5] : null);
+        };
+      });
+      dibujaBase([-0.15, 1.5]);
+    }
   }
 
   // 5) huella de circuito
@@ -3843,62 +3897,68 @@ async function viewEquipos() {
     }), PLOTLY_CFG);
   }
 
-  // 6) convergencia + 7) proyección
-  const row2 = el(`<div class="grid cols-2"></div>`);
-  $view.appendChild(row2);
+  // dispersión del campo: SOLO estado del campo (el baseline vive arriba,
+  //    junto al forest de tendencias — no son la misma pregunta)
   if (d.conv) {
-    const convVerd = Math.abs(d.conv.slope) > (d.conv.ci || 0)
-      ? "concluyente" : "inconclusa";
+    const xsC = d.conv.rounds, ysC = d.conv.sigma;
+    const nC = xsC.length;
+    const deltaRec = nC >= 2 ? ysC[nC - 1] - ysC[nC - 2] : null;
+    const dirC = d.conv.slope > 0 ? "al alza" : "a la baja";
+    const ciC = d.conv.ci || 0;
+    const verdC = Math.abs(d.conv.slope) <= ciC ? "inconclusa"
+      : Math.abs(d.conv.slope) > 2 * ciC ? `${dirC} (evidencia fuerte)`
+      : `${dirC} (evidencia moderada)`;
+    // banda de IC 95% de la RECTA de tendencia (client-side, OLS clásico)
+    const xmC = xsC.reduce((a, v) => a + v, 0) / nC;
+    const sxxC = xsC.reduce((a, v) => a + (v - xmC) ** 2, 0) || 1;
+    const resC = ysC.map((v, i) => v - d.conv.trend[i]);
+    const sresC = Math.sqrt(resC.reduce((a, v) => a + v * v, 0) / Math.max(nC - 2, 1));
+    const T95C = { 1: 12.71, 2: 4.30, 3: 3.18, 4: 2.78, 5: 2.57, 6: 2.45, 7: 2.36, 8: 2.31 };
+    const t95C = T95C[nC - 2] || 2.26;
+    const seFit = (x) => sresC * Math.sqrt(1 / nC + (x - xmC) ** 2 / sxxC);
     const c6 = chartCard({
       title: "Dispersión del campo completo (σ y MAD por ronda)",
-      sub: "σ = clásica, sensible a rezagados · MAD = robusta · si cuentan historias distintas, 1-2 equipos dominan la 'apertura'",
-      summary: `Tendencia de la dispersión: ${d.conv.slope > 0 ? "+" : ""}${d.conv.slope} pp/ronda (IC 95% ±${(d.conv.ci || 0).toFixed(3)} → ${convVerd}). Se calcula siempre sobre TODO el campo.`,
-      tips: ["La línea punteada es la tendencia de σ; su IC decide si la 'apertura' o el 'apretón' es concluyente o ruido.",
+      sub: "σ = clásica, sensible a rezagados · MAD = robusta · banda amarilla = IC 95% de la tendencia · escala ampliada (no inicia en cero)",
+      summary: `Tendencia global: ${d.conv.slope > 0 ? "+" : ""}${d.conv.slope} pp/ronda (IC 95% ±${ciC.toFixed(3)} → ${verdC}).` +
+        (deltaRec != null ? ` Última ronda: ${deltaRec >= 0 ? "+" : ""}${deltaRec.toFixed(2)} pp vs la anterior.` : "") +
+        ` Con ${nC} rondas, la señal sigue condicionada por el calendario. Siempre sobre TODO el campo.`,
+      tips: ["La tendencia global y el cambio reciente son escalas temporales distintas: aquí se reportan las dos.",
              "<b>¿σ sube pero MAD no?</b> → uno o dos equipos rezagados dominan la dispersión clásica; el pelotón central no se abrió.",
-             "<b>¿Ambas caen?</b> → el campo se aprieta de verdad: cada décima mueve más posiciones."],
+             "σ creciente NO implica 'el líder se escapa': puede ser la cola rezagándose o un solo equipo extremo.",
+             "La banda amarilla es el IC de la RECTA: si cabe una recta plana dentro, la 'apertura' no está demostrada."],
     });
-    row2.appendChild(c6.card);
+    $view.appendChild(c6.card);
     Plotly.newPlot(c6.plot, [
+      { type: "scatter", mode: "lines", showlegend: false, hoverinfo: "skip",
+        x: xsC, y: xsC.map((x) => d.conv.trend[xsC.indexOf(x)] - t95C * seFit(x)),
+        line: { width: 0 } },
+      { type: "scatter", mode: "lines", showlegend: false, hoverinfo: "skip",
+        x: xsC, y: xsC.map((x) => d.conv.trend[xsC.indexOf(x)] + t95C * seFit(x)),
+        fill: "tonexty", fillcolor: "rgba(255,196,0,.08)", line: { width: 0 } },
       { type: "scatter", mode: "lines+markers", name: "σ clásica",
-        x: d.conv.rounds, y: d.conv.sigma, line: { color: "#5B8FD9", width: 2.2 },
+        x: xsC, y: ysC, line: { color: "#5B8FD9", width: 2.2 },
         marker: { size: 7 },
         hovertemplate: "Ronda %{x}<br>σ = %{y:.3f} pp<extra></extra>" },
       ...(d.conv.mad ? [{ type: "scatter", mode: "lines+markers", name: "MAD robusta",
-        x: d.conv.rounds, y: d.conv.mad,
+        x: xsC, y: d.conv.mad,
         line: { color: "#2dd4bf", width: 1.8, dash: "dot" }, marker: { size: 5 },
         hovertemplate: "Ronda %{x}<br>MAD = %{y:.3f} pp<extra></extra>" }] : []),
       { type: "scatter", mode: "lines", name: "tendencia σ",
-        x: d.conv.rounds, y: d.conv.trend,
+        x: xsC, y: d.conv.trend,
         line: { color: "#FFC400", width: 2, dash: "dash" }, hoverinfo: "skip" },
     ], baseLayout({
-      height: 460, margin: { l: 56, r: 16, t: 14, b: 44 },
+      height: 380, margin: { l: 56, r: 70, t: 14, b: 44 },
+      annotations: [
+        { x: xsC[nC - 1], y: ysC[nC - 1], text: `σ ${ysC[nC - 1].toFixed(2)}`,
+          showarrow: false, xanchor: "left", xshift: 8,
+          font: { size: 10, color: "#5B8FD9" } },
+        { xref: "paper", yref: "paper", x: 0.005, y: 0.02, xanchor: "left",
+          text: "ESCALA AMPLIADA · NO INICIA EN CERO", showarrow: false,
+          font: { size: 8.5, color: "#77839a" } },
+      ],
       xaxis: { ...baseLayout().xaxis, title: { text: "RONDA", font: { size: 10 } }, dtick: 1 },
       yaxis: { ...baseLayout().yaxis, title: { text: "DISPERSIÓN (PP)", font: { size: 10 } } },
       legend: { orientation: "h", y: 1.1, x: 1, xanchor: "right" },
-    }), PLOTLY_CFG);
-  }
-  const conProy = conSlope.filter((t) => t.proy != null)
-    .sort((a, b) => a.proy - b.proy);
-  if (conProy.length) {
-    const c7 = chartCard({
-      title: `Proyección ingenua · Ronda ${d.next_round}`,
-      sub: "extrapolación de la tendencia pura, sin efecto circuito",
-      tips: ["Es el <b>baseline</b>: cuando pase la carrera real, compara — si un modelo sofisticado no le gana a esta recta, no vale su complejidad.",
-             "El déficit proyectado se acota en 0 (nadie puede ser 'más rápido que la pole' por definición)."],
-    });
-    row2.appendChild(c7.card);
-    const rev = [...conProy].reverse();
-    Plotly.newPlot(c7.plot, [{
-      type: "bar", orientation: "h",
-      y: rev.map((t) => t.team), x: rev.map((t) => t.proy),
-      marker: { color: rev.map((t) => t.color), line: { color: "#11141b", width: 2 } },
-      text: rev.map((t) => ` ${t.proy.toFixed(2)}% `), textposition: "outside",
-      textfont: { size: 10, color: "#9aa0aa" },
-      hovertemplate: "<b>%{y}</b> · déficit proyectado %{x:.3f}%<extra></extra>",
-    }], baseLayout({
-      height: 460, margin: { l: 110, r: 62, t: 14, b: 44 },
-      xaxis: { ...baseLayout().xaxis, title: { text: "DÉFICIT PROYECTADO (%)", font: { size: 10 } } },
-      yaxis: { ...baseLayout().yaxis, gridcolor: "rgba(0,0,0,0)", tickfont: { size: 11 } },
     }), PLOTLY_CFG);
   }
 }
