@@ -918,45 +918,161 @@ function drawTelCharts(zone, d, Z = null) {
 
   T.telemetria.appendChild(el(`<div class="section-title" id="sec-tel">Telemetría de vuelta</div>`));
 
-  // circuito: trazado real por GPS coloreado por velocidad (vuelta de referencia)
+  // ── circuito: mapa analítico — velocidad / tiempo por metro / dv-ds,
+  //    auto-rotado para llenar el lienzo y con los puntos clave marcados
   const refC = d.drivers[0];
   if (refC && refC.x && refC.x.length > 10) {
-    const vmax = Math.max(...refC.speed), vmin = Math.min(...refC.speed);
-    const iMin = refC.speed.indexOf(vmin);
-    let curvaLenta = null;
-    if ((d.corners || []).length) {
-      const dm = refC.d[iMin];
-      curvaLenta = d.corners.reduce((a, c) =>
-        Math.abs(c.d - dm) < Math.abs(a.d - dm) ? c : a);
+    const nP = refC.x.length;
+    const dTotC = refC.d[refC.d.length - 1];
+    // AUTO-ROTACIÓN: prueba 180 ángulos y elige el que maximiza la escala
+    const targetW = Math.max(600, (T.resumen.clientWidth || 1400) - 110);
+    const targetH = 540;
+    let mejorRot = { esc: 0, th: 0 };
+    for (let deg = 0; deg < 180; deg += 1) {
+      const th = (deg * Math.PI) / 180, c2 = Math.cos(th), s2 = Math.sin(th);
+      let mnx = 1e12, mxx = -1e12, mny = 1e12, mxy = -1e12;
+      for (let i = 0; i < nP; i += 4) {
+        const rx = refC.x[i] * c2 - refC.y[i] * s2;
+        const ry = refC.x[i] * s2 + refC.y[i] * c2;
+        if (rx < mnx) mnx = rx; if (rx > mxx) mxx = rx;
+        if (ry < mny) mny = ry; if (ry > mxy) mxy = ry;
+      }
+      const esc = Math.min(targetW / (mxx - mnx || 1), targetH / (mxy - mny || 1));
+      if (esc > mejorRot.esc) mejorRot = { esc, th };
     }
+    const co = Math.cos(mejorRot.th), si = Math.sin(mejorRot.th);
+    const RX = refC.x.map((x, i) => x * co - refC.y[i] * si);
+    const RY = refC.x.map((x, i) => x * si + refC.y[i] * co);
+    const rotP = (x, y) => [x * co - y * si, x * si + y * co];
+    const cornersR = (d.corners || []).map((c) => {
+      const [x, y] = rotP(c.x, c.y);
+      return { ...c, x, y };
+    });
+
+    // puntos y métricas clave
+    const vmax = Math.max(...refC.speed), vmin = Math.min(...refC.speed);
+    const iMax = refC.speed.indexOf(vmax), iMin = refC.speed.indexOf(vmin);
+    const curvaEn = (dist) => cornersR.length
+      ? cornersR.reduce((a, c) => (Math.abs(c.d - dist) < Math.abs(a.d - dist) ? c : a)) : null;
+    const cLenta = curvaEn(refC.d[iMin]);
+    // consumo de tiempo por curva: t(d+120) − t(d−120) con el tiempo calibrado
+    const tAt = (dist) => {
+      let lo = 0, hi = refC.d.length - 1;
+      if (dist <= refC.d[0]) return refC.t[0];
+      if (dist >= refC.d[hi]) return refC.t[hi];
+      while (hi - lo > 1) { const m = (lo + hi) >> 1; (refC.d[m] <= dist ? lo = m : hi = m); }
+      const f = (dist - refC.d[lo]) / Math.max(refC.d[hi] - refC.d[lo], 1e-6);
+      return refC.t[lo] + f * (refC.t[hi] - refC.t[lo]);
+    };
+    const consumo = cornersR.map((c) => ({
+      n: c.n, x: c.x, y: c.y,
+      t: tAt(Math.min(c.d + 120, dTotC)) - tAt(Math.max(c.d - 120, 0)),
+    })).sort((a, b) => b.t - a.t);
+    const criticas = new Set(consumo.slice(0, 2).map((c) => c.n));
+    const sumCir = `Vmax ${Math.round(vmax)} km/h · Vmin ${Math.round(vmin)} km/h` +
+      `${cLenta ? ` (T${cLenta.n})` : ""}` +
+      (consumo.length >= 2
+        ? ` · mayor consumo de tiempo: T${consumo[0].n} (${consumo[0].t.toFixed(1)}s) y T${consumo[1].n} (${consumo[1].t.toFixed(1)}s).`
+        : ".");
+
     const cCir = chartCard({
-      title: "Circuito · mapa de velocidad",
-      sub: `trazado real por GPS · vuelta de referencia de ${refC.code} (V${refC.lap_number})`,
-      summary: `Punta de ${Math.round(vmax)} km/h y punto más lento a ${Math.round(vmin)} km/h${curvaLenta ? ` (curva ${curvaLenta.n})` : ""}. El color enseña dónde el coche vuela y dónde se arrastra.`,
-      tips: ["<b>¿Azul hielo?</b> → fondo plano: ahí mandan el motor y el ala pequeña.",
-             "<b>¿Rojo?</b> → curvas lentas: ahí se gana o se pierde la vuelta, con tracción y frenada.",
-             "Los números son las curvas oficiales; el rombo blanco es la línea de meta y la flecha marca el sentido de giro.",
-             "Crúzalo con el mapa de dominancia: quien gana los tramos rojos tiene el coche 'mecánico'; quien gana los azules, el aerodinámico."],
+      title: "Circuito · mapa analítico",
+      sub: `vuelta de referencia de ${refC.code} (V${refC.lap_number}) · GPS remuestreado cada 5 m y suavizado · trazado auto-rotado para llenar el lienzo`,
+      summary: sumCir,
+      legendHtml: `<div class="pills" style="padding:0 18px 10px">
+        <button class="pill" data-m="vel">VELOCIDAD</button>
+        <button class="pill" data-m="tpm">TIEMPO POR METRO</button>
+        <button class="pill" data-m="grad">ACELERACIÓN / FRENADA</button>
+        <button class="pill" data-esc="1" style="margin-left:auto">ESCALA FIJA 0-360</button></div>`,
+      tips: ["La velocidad NO equivale a tiempo: dt = ds/v. En curva lenta, cada km/h vale mucho más que en recta — por eso existe el modo TIEMPO POR METRO, que enseña dónde se consume la vuelta de verdad.",
+             "<b>VELOCIDAD:</b> azul hielo = vuela, rojo = se arrastra. <b>TIEMPO POR METRO:</b> rojo = ahí se gasta la vuelta. <b>ACELERACIÓN/FRENADA:</b> azul = acelera, rojo = frena, gris = estable.",
+             "Los rombos marcan Vmax y Vmin; las curvas con borde brillante son las que MÁS TIEMPO consumen (±120 m alrededor).",
+             "ESCALA FIJA (0-360) hace comparables los colores entre vueltas y sesiones; la escala auto da más contraste dentro de esta vuelta.",
+             "El rombo blanco es la meta y la flecha el sentido de giro."],
     });
     T.resumen.appendChild(cCir.card);
     T.resumen.appendChild(el(`<div style="height:18px"></div>`));
-    const marcasCir = marcadoresMapa();
-    Plotly.newPlot(cCir.plot, [
-      { type: "scatter", mode: "lines", x: refC.x, y: refC.y, hoverinfo: "skip",
-        showlegend: false, line: { color: "rgba(255,255,255,.07)", width: 11 } },
-      { type: "scatter", mode: "markers", x: refC.x, y: refC.y, showlegend: false,
-        marker: { size: 5, color: refC.speed,
-                  colorscale: [[0, "#E0243F"], [0.5, "#FFC400"], [1, "#38bdf8"]],
-                  colorbar: { orientation: "h", y: -0.1, thickness: 10, outlinewidth: 0,
-                              title: { text: "VELOCIDAD (KM/H)", font: { size: 9.5, color: "#8a919e" }, side: "bottom" },
-                              tickfont: { size: 9.5, color: "#8a919e" } } },
-        hovertemplate: "%{marker.color:.0f} km/h<extra></extra>" },
-      marcasCir.meta,
-    ].filter(Boolean), baseLayout({
-      height: 620, margin: { l: 10, r: 10, t: 10, b: 10 },
-      xaxis: { visible: false }, yaxis: { visible: false, scaleanchor: "x" },
-      annotations: marcasCir.anns,
-    }), PLOTLY_CFG);
+
+    // gradiente dv/ds (los canales ya vienen suavizados del backend)
+    const grad = refC.speed.map((v, i) => {
+      const i0 = Math.max(0, i - 1), i1 = Math.min(nP - 1, i + 1);
+      return (refC.speed[i1] - refC.speed[i0]) / Math.max(refC.d[i1] - refC.d[i0], 1e-6);
+    });
+    const gMax = Math.max(...grad.map(Math.abs));
+    const msm = refC.speed.map((v) => 3600 / Math.max(v, 30));   // ms por metro
+
+    const iA2 = Math.floor(nP * 0.03), iB2 = Math.floor(nP * 0.055);
+    const dibujaCir = () => {
+      const modo = state.cirModo || "vel";
+      const fija = !!state.cirFija;
+      cCir.card.querySelectorAll("[data-m]").forEach((b) =>
+        b.classList.toggle("active", b.dataset.m === modo));
+      const bEsc = cCir.card.querySelector("[data-esc]");
+      bEsc.classList.toggle("active", fija);
+      bEsc.style.display = modo === "vel" ? "" : "none";
+      const M = {
+        vel: { c: refC.speed,
+               scale: [[0, "#E0243F"], [0.5, "#FFC400"], [1, "#38bdf8"]],
+               min: fija ? 0 : undefined, max: fija ? 360 : undefined,
+               titulo: "KM/H", hover: "%{marker.color:.0f} km/h" },
+        tpm: { c: msm,
+               scale: [[0, "#38bdf8"], [0.5, "#FFC400"], [1, "#E0243F"]],
+               min: undefined, max: undefined,
+               titulo: "MS / METRO", hover: "%{marker.color:.0f} ms por metro" },
+        grad: { c: grad,
+                scale: [[0, "#E0243F"], [0.5, "#39424e"], [1, "#38bdf8"]],
+                min: -gMax, max: gMax,
+                titulo: "ΔKM/H POR M", hover: "%{marker.color:+.1f} km/h por m" },
+      }[modo];
+      const trazas = [
+        { type: "scatter", mode: "lines", x: RX, y: RY, hoverinfo: "skip",
+          showlegend: false, line: { color: "rgba(255,255,255,.07)", width: 11 } },
+        { type: "scatter", mode: "markers", x: RX, y: RY, showlegend: false,
+          marker: { size: 5, color: M.c, colorscale: M.scale,
+                    cmin: M.min, cmax: M.max,
+                    colorbar: { thickness: 12, outlinewidth: 0, len: 0.8,
+                                title: { text: M.titulo, font: { size: 9.5, color: "#8a919e" } },
+                                tickfont: { size: 9.5, color: "#8a919e" } } },
+          hovertemplate: M.hover + "<extra></extra>" },
+        { type: "scatter", mode: "markers+text", showlegend: false, hoverinfo: "skip",
+          x: [RX[0]], y: [RY[0]],
+          marker: { size: 10, color: "#e8eaed", symbol: "diamond",
+                    line: { color: "#11141b", width: 1.5 } },
+          text: ["META"], textposition: "top center",
+          textfont: { size: 9, color: "#8a919e" } },
+        { type: "scatter", mode: "markers+text", showlegend: false, hoverinfo: "skip",
+          x: [RX[iMax], RX[iMin]], y: [RY[iMax], RY[iMin]],
+          marker: { size: 9, color: ["#38bdf8", "#E0243F"], symbol: "diamond",
+                    line: { color: "#0b0d12", width: 1.5 } },
+          text: [`VMAX ${Math.round(vmax)}`, `VMIN ${Math.round(vmin)}${cLenta ? " · T" + cLenta.n : ""}`],
+          textposition: ["bottom center", "top center"],
+          textfont: { size: 9.5, color: ["#7dd3fc", "#ff8181"] } },
+      ];
+      Plotly.react(cCir.plot, trazas, baseLayout({
+        height: 600, margin: { l: 8, r: 8, t: 8, b: 8 },
+        xaxis: { visible: false }, yaxis: { visible: false, scaleanchor: "x" },
+        annotations: [
+          ...cornersR.map((c) => ({
+            x: c.x, y: c.y, text: String(c.n), showarrow: false,
+            bgcolor: "rgba(3,5,7,.72)",
+            bordercolor: criticas.has(c.n) ? "rgba(56,189,248,.8)" : "rgba(255,255,255,.10)",
+            borderwidth: 1, borderpad: 2,
+            font: { size: criticas.has(c.n) ? 11.5 : 10.5,
+                    color: criticas.has(c.n) ? "#cfe9fb" : "#b8c7d5" },
+          })),
+          { x: RX[iB2], y: RY[iB2], ax: RX[iA2], ay: RY[iA2],
+            axref: "x", ayref: "y", text: "", showarrow: true, arrowhead: 2,
+            arrowsize: 1.3, arrowwidth: 1.6, arrowcolor: "#e8eaed" },
+        ],
+      }), PLOTLY_CFG);
+    };
+    cCir.card.querySelectorAll("[data-m]").forEach((b) => {
+      b.onclick = () => { state.cirModo = b.dataset.m; dibujaCir(); };
+    });
+    cCir.card.querySelector("[data-esc]").onclick = () => {
+      state.cirFija = !state.cirFija; dibujaCir();
+    };
+    dibujaCir();
   }
 
   if (d.dtw && d.dtw.length) {
