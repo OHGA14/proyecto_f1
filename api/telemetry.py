@@ -14,6 +14,7 @@ import time
 import numpy as np
 import fastf1 as ff1
 
+from f1core import energia, reglas2026
 from f1core.laps import get_selected_lap
 from f1core.physics import compute_gg_from_telemetry, build_gg_envelope, _dtw_distance
 from f1core.timeutils import _get_sector_cut_distances
@@ -523,6 +524,33 @@ def _assemble(s, entries):
         else:
             i += 1
 
+    # ── nivel 1 eléctrico 2026: potencia en rueda ESTIMADA + candidatos a
+    #    recorte (super clipping) — estimaciones declaradas, no medición
+    for item, e in zip(drivers, entries):
+        ch = e["ch"]
+        v_ms = np.asarray(ch["speed"], dtype=float) / 3.6
+        a_ms2 = np.asarray(ch["glong"], dtype=float) * 9.81
+        p_kw = energia.potencia_rueda_kw(v_ms, a_ms2)
+        st_i = max(1, len(ch["d"]) // _N_POINTS)
+        item["p_rueda_kw"] = _downsample(p_kw, st_i, 0)
+        item["recortes"] = energia.candidatos_recorte(
+            np.asarray(ch["d"], dtype=float), np.asarray(ch["speed"], dtype=float),
+            a_ms2, np.asarray(ch["throttle"], dtype=float),
+            np.asarray(ch["brake"], dtype=float),
+            np.asarray(ch["dt"], dtype=float), zones,
+            glat=np.asarray(ch["glat"], dtype=float))
+    # curva del techo regulatorio (para pintarla sin duplicar reglas en JS)
+    v_grid = list(range(150, 365, 5))
+    reglas_payload = {
+        "p_ers_max_kw": reglas2026.P_ERS_MAX_KW,
+        "ice_base_kw": reglas2026.ICE_BASE_KW,
+        "eta": reglas2026.ETA_TREN,
+        "superclip_objetivo_s": list(reglas2026.SUPERCLIP_OBJETIVO_S),
+        "supuestos": energia.SUPUESTOS,
+        "techo": [[v, round(float(reglas2026.techo_potencia_rueda_kw(v)), 0)]
+                  for v in v_grid],
+    }
+
     # resúmenes calculados (firma de la casa)
     summaries = {}
     rapido = min(drivers, key=lambda d: d["lap_time"] or 9e9)
@@ -560,6 +588,7 @@ def _assemble(s, entries):
 
     return {"ref": ref["key"], "drivers": drivers, "corners": corners,
             "cuts": ch_ref.get("cuts") or [], "segments": segments,
+            "reglas2026": reglas_payload,
             "dtw": dtw, "micro": micro, "sectors": sectors, "zones": zones,
             "summaries": summaries, "info": {"total_m": round(d_total)}}
 

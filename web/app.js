@@ -1530,7 +1530,7 @@ function drawTelCharts(zone, d, Z = null) {
   }
   const cVel = chartCard({
     title: "Perfil de velocidad",
-    sub: `${lapLabels} · sólida = referencia, discontinua = rivales · sectores estimados por telemetría calibrada`,
+    sub: `${lapLabels} · sólida = referencia, discontinua = rivales · franjas superiores = candidatos a recorte (detalle en FÍSICA) · sectores estimados por telemetría calibrada`,
     summary: sumVel,
     tips: ["<b>¿Una línea llega más alto en recta?</b> → es el resultado NETO: menos ala, mejor tracción previa, rebufo o modo de motor — crúzala con acelerador y marchas antes de atribuir la causa.",
            "<b>¿Valle más estrecho en una curva?</b> → frena más tarde y suelta antes: ahí gana el tiempo.",
@@ -1538,12 +1538,18 @@ function drawTelCharts(zone, d, Z = null) {
            "La franja de abajo es la DIFERENCIA de velocidad: hace visible por qué la ventaja acumulada sube o baja."],
   });
   T.telemetria.appendChild(cVel.card);
+  // franjas superiores: candidatos a recorte (super clipping) por piloto
+  const recShapes = d.drivers.flatMap((x, i) => (x.recortes || []).map((r) => ({
+    type: "rect", x0: r.d0, x1: r.d1, yref: "paper",
+    y0: 0.965 - i * 0.035, y1: 0.995 - i * 0.035,
+    fillcolor: rgba(x.color, r.tipo === "fuerte" ? 0.55 : 0.22),
+    line: { width: 0 } })));
   Plotly.newPlot(cVel.plot, d.drivers.map((x, i) => ({
     type: "scatter", mode: "lines", name: x.code, x: x.d, y: x.speed,
     line: { color: x.color, width: 1.9, dash: DASHES[i % DASHES.length] },
     hovertemplate: `<b>${x.code}</b> · %{y:.0f} km/h<extra></extra>`,
   })), baseLayout({
-    height: 480, hovermode: "x unified", shapes: sectorShapes,
+    height: 480, hovermode: "x unified", shapes: [...sectorShapes, ...recShapes],
     annotations: [...sectorAnnots, ...winnerAnnots, ...zoneAnnots,
       ...(d.corners || []).map((c) => ({ x: c.d, yref: "paper", y: 1.005,
         text: String(c.n), showarrow: false, font: { size: 8, color: "#5f6b7d" } }))],
@@ -1982,6 +1988,9 @@ function drawTelCharts(zone, d, Z = null) {
       sub: "aceleración neta a fondo vs velocidad · proxy de motor térmico, MGU-K y drag · mediana por bloques de 5 km/h",
       legendHtml: `<div class="pills ers-ctl" style="padding:0 18px 10px"></div>`,
       tips: ["La línea es la MEDIANA por bloque de 5 km/h; la banda, el 50% central de las muestras. <b>¿Bandas traslapadas?</b> → la diferencia NO es concluyente.",
+             "El modo POTENCIA RUEDA usa dinámica longitudinal inversa con SUPUESTOS declarados (masa 800 kg, CdA 1.35 m², Crr 0.012): es la misma señal en otras unidades, no una medición nueva.",
+             "La línea punteada ámbar es el TECHO regulatorio estimado 2026: (motor térmico ~400 kW supuesto + límite ERS según velocidad) × eficiencia — tu estimación debería vivir por debajo.",
+             "<b>¿Picos por ENCIMA del techo?</b> → no es un motor ilegal: rebufo (menos drag real que el supuesto), pendiente del circuito (no modelada) o masa/CdA distintos inflan la estimación. El techo compara TENDENCIAS, no muestras sueltas.",
              "La aceleración cae con la velocidad porque el drag crece con v²: <b>una caída suave es NORMAL</b>, no es clipping. Sospecha solo de caídas abruptas y persistentes en la misma recta.",
              "Se excluyen frenadas, curvas, cambios de marcha (con sus muestras vecinas) y derivadas fuera de patrón (&lt; −2 m/s²).",
              "2026: ya NO existe el DRS. La aerodinámica activa (modo recta/curva) y el Overtake Mode cambian esta curva y NO vienen en la fuente de datos — por eso es un proxy inferido.",
@@ -1994,15 +2003,25 @@ function drawTelCharts(zone, d, Z = null) {
     const resumenErs = el(`<div class="chart-summary"></div>`);
     const warnErs = el(`<div class="chart-summary warn">PROXY INFERIDO · no mide directamente la energía del ERS ni confirma el Overtake Mode.</div>`);
     const tablaErs = el(`<div class="table-wrap"></div>`);
+    const objetivoSC = (d.reglas2026 && d.reglas2026.superclip_objetivo_s) || [2, 4];
+    const recTxt = d.drivers.map((x) => {
+      const rs = x.recortes || [];
+      const fuerte = rs.filter((r) => r.tipo === "fuerte").reduce((s, r) => s + r.dur_s, 0);
+      const debil = rs.filter((r) => r.tipo === "debil").reduce((s, r) => s + r.dur_s, 0);
+      if (!fuerte && !debil) return `${x.code}: sin candidatos`;
+      return `${x.code}: ${fuerte ? fuerte.toFixed(1) + "s fuerte" : ""}${fuerte && debil ? " + " : ""}${debil ? debil.toFixed(1) + "s débil" : ""}`;
+    }).join(" · ");
+    const recorteErs = el(`<div class="chart-summary warn">CANDIDATOS A RECORTE (super clipping) en la vuelta analizada — ${recTxt} · referencia 2026: ${objetivoSC[0]}-${objetivoSC[1]}s por vuelta. Firma cinemática (a fondo, sin freno, desacelerando o meseta prematura en recta): candidatos, NO confirmación.</div>`);
     const guiaErs = cErs.card.querySelector(".chart-guide");
     cErs.card.insertBefore(resumenErs, guiaErs);
     cErs.card.insertBefore(warnErs, guiaErs);
+    cErs.card.insertBefore(recorteErs, guiaErs);
     cErs.card.insertBefore(tablaErs, guiaErs);
 
     // muestras limpias: a fondo, sin freno, poca carga lateral, sin cambio de
     // marcha adyacente; derivadas fuera de patrón (< -2 m/s²) no puntúan
     const muestrasDe = (x, zona) => {
-      const xs = [], ys = [];
+      const xs = [], ys = [], ps = [];
       for (let i = 1; i < x.d.length - 1; i++) {
         const frenando = typeof x.brake[i] === "boolean" ? x.brake[i] : x.brake[i] >= 5;
         if (x.throttle[i] < 95 || frenando || Math.abs(x.glat[i]) >= 0.5) continue;
@@ -2011,8 +2030,9 @@ function drawTelCharts(zone, d, Z = null) {
         const a = x.glong[i] * 9.81;
         if (a < -2) continue;
         xs.push(x.speed[i]); ys.push(a);
+        ps.push((x.p_rueda_kw || [])[i]);
       }
-      return { xs, ys };
+      return { xs, ys, ps };
     };
     const BIN = 5;
     const binea = (xs, ys) => {
@@ -2035,6 +2055,9 @@ function drawTelCharts(zone, d, Z = null) {
       `<button class="pill" data-z="-1">TODAS LAS RECTAS</button>`,
       ...zonasErs.map((z, i) =>
         `<button class="pill" data-z="${i}">RECTA ${i + 1} · ${z.d0}-${z.d1}m</button>`),
+      `<span style="width:12px"></span>`,
+      `<button class="pill" data-met="acc">ACELERACIÓN</button>`,
+      `<button class="pill" data-met="pow">POTENCIA RUEDA (KW)</button>`,
       `<button class="pill" data-pts="1" style="margin-left:auto">MOSTRAR MUESTRAS</button>`,
     ].join("");
 
@@ -2044,10 +2067,18 @@ function drawTelCharts(zone, d, Z = null) {
       ctlErs.querySelectorAll("[data-z]").forEach((b) =>
         b.classList.toggle("active", +b.dataset.z === iZona));
       ctlErs.querySelector("[data-pts]").classList.toggle("active", !!state.ersPts);
+      const met = state.ersMet === "pow" ? "pow" : "acc";
+      ctlErs.querySelectorAll("[data-met]").forEach((b) =>
+        b.classList.toggle("active", b.dataset.met === met));
 
       const pilotos = d.drivers
-        .map((x) => { const m3 = muestrasDe(x, zona); return { x, ...m3, bins: binea(m3.xs, m3.ys) }; })
-        .filter((p) => p.bins.length >= 3);
+        .map((x) => {
+          const m3 = muestrasDe(x, zona);
+          const binsAcc = binea(m3.xs, m3.ys);
+          const bins = met === "pow" ? binea(m3.xs, m3.ps) : binsAcc;
+          return { x, ...m3, bins, binsAcc };
+        })
+        .filter((p) => p.binsAcc.length >= 3);
       let v0 = null, v1 = null;
       if (pilotos.length) {
         v0 = Math.max(...pilotos.map((p) => p.bins[0].v));
@@ -2058,7 +2089,7 @@ function drawTelCharts(zone, d, Z = null) {
       const trazas = [];
       if (state.ersPts) pilotos.forEach((p) => trazas.push({
         type: "scattergl", mode: "markers", name: p.x.code, showlegend: false,
-        legendgroup: p.x.code, x: p.xs, y: p.ys,
+        legendgroup: p.x.code, x: p.xs, y: met === "pow" ? p.ps : p.ys,
         marker: { color: rgba(p.x.color, 0.1), size: 2 }, hoverinfo: "skip" }));
       pilotos.forEach((p) => {
         const B = enRango(p);
@@ -2072,7 +2103,9 @@ function drawTelCharts(zone, d, Z = null) {
           x: B.map((r) => r.v), y: B.map((r) => r.med),
           line: { color: p.x.color, width: 2.2 },
           customdata: B.map((r) => [r.n, r.q25.toFixed(1), r.q75.toFixed(1)]),
-          hovertemplate: `<b>${p.x.code}</b> · %{x:.0f} km/h<br>mediana %{y:.1f} m/s² · 50% central %{customdata[1]} a %{customdata[2]}<br>%{customdata[0]} muestras<extra></extra>` });
+          hovertemplate: met === "pow"
+            ? `<b>${p.x.code}</b> · %{x:.0f} km/h<br>mediana %{y:.0f} kW estimados · 50% central %{customdata[1]} a %{customdata[2]}<br>%{customdata[0]} muestras<extra></extra>`
+            : `<b>${p.x.code}</b> · %{x:.0f} km/h<br>mediana %{y:.1f} m/s² · 50% central %{customdata[1]} a %{customdata[2]}<br>%{customdata[0]} muestras<extra></extra>` });
       });
       const anots = pilotos.map((p) => {
         const B = enRango(p);
@@ -2085,24 +2118,37 @@ function drawTelCharts(zone, d, Z = null) {
         anots.push({ xref: "paper", yref: "paper", x: 0.99, y: 0.98, xanchor: "right",
           text: `RANGO COMPARABLE · ${Math.round(v0)}-${Math.round(v1)} KM/H`,
           showarrow: false, font: { size: 9.5, color: "#77839a" } });
+      // techo regulatorio 2026 (ICE supuesto + límite ERS por velocidad) × η
+      if (met === "pow" && d.reglas2026 && v0 != null) {
+        const techo = d.reglas2026.techo.filter(([v]) => v >= v0 - 5 && v <= v1 + 10);
+        trazas.push({ type: "scatter", mode: "lines", name: "techo FIA est.",
+          x: techo.map(([v]) => v), y: techo.map(([, kw]) => kw),
+          line: { color: "rgba(255,196,0,.7)", width: 1.6, dash: "dash" },
+          hovertemplate: "techo regulatorio estimado · %{y:.0f} kW<extra></extra>" });
+        anots.push({ x: techo.length ? techo[techo.length - 1][0] : v1, yref: "y",
+          y: techo.length ? techo[techo.length - 1][1] : 0,
+          text: "TECHO FIA (est.)", showarrow: false, xanchor: "right", yshift: 12,
+          font: { size: 8.5, color: "rgba(255,196,0,.8)" } });
+      }
 
       Plotly.react(cErs.plot, trazas, baseLayout({
         height: 460, margin: { l: 56, r: 64, t: 16, b: 46 },
         annotations: anots,
         xaxis: { ...baseLayout().xaxis, title: { text: "VELOCIDAD (KM/H)", font: { size: 10 } },
                  showgrid: true, gridcolor: "rgba(255,255,255,.05)", griddash: "dot" },
-        yaxis: { ...baseLayout().yaxis, title: { text: "ACELERACIÓN (M/S²)", font: { size: 10 } },
+        yaxis: { ...baseLayout().yaxis,
+                 title: { text: met === "pow" ? "POTENCIA EN RUEDA ESTIMADA (KW)" : "ACELERACIÓN (M/S²)", font: { size: 10 } },
                  zeroline: true, zerolinecolor: "rgba(255,255,255,.25)" },
         legend: { orientation: "h", y: 1.08, x: 1, xanchor: "right" },
       }), PLOTLY_CFG);
 
       // tabla 200/250/300 + caída + tiempo estimado 200→300 (solo rango común)
-      const cerca = (p, v) => p.bins.find((r) => Math.abs(r.v - v) <= BIN / 2 + 0.01);
+      const cerca = (p, v) => p.binsAcc.find((r) => Math.abs(r.v - v) <= BIN / 2 + 0.01);
       const t2030 = (p) => {
         if (v0 == null || v0 > 200 || v1 < 300) return null;
         let t = 0;
         for (let v = 200; v < 300; v += BIN) {
-          const r = p.bins.find((r2) => r2.v === v + BIN / 2);
+          const r = p.binsAcc.find((r2) => r2.v === v + BIN / 2);
           if (!r || r.med < 0.3) return null;
           t += (BIN / 3.6) / r.med;
         }
@@ -2151,6 +2197,9 @@ function drawTelCharts(zone, d, Z = null) {
     ctlErs.querySelector("[data-pts]").onclick = () => {
       state.ersPts = !state.ersPts; renderErs();
     };
+    ctlErs.querySelectorAll("[data-met]").forEach((b) => {
+      b.onclick = () => { state.ersMet = b.dataset.met; renderErs(); };
+    });
     renderErs();
   }
 
