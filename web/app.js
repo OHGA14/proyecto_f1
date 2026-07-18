@@ -70,6 +70,39 @@ function chartHeight({ items = 0, min = 260, max = 520, per = 36 }) {
   return Math.min(max, Math.max(min, items * per + 140));
 }
 
+/* panel sincronizado: las gráficas vs distancia comparten zoom y cursor.
+   La bandera `lock` evita el bucle infinito (mi relayout dispara el tuyo). */
+function sincronizaX(plots) {
+  const gds = plots.filter(Boolean);
+  if (gds.length < 2) return;
+  let lock = false;
+  gds.forEach((gd) => {
+    gd.on("plotly_relayout", (ev) => {
+      if (lock) return;
+      const a = ev["xaxis.range[0]"], b = ev["xaxis.range[1]"];
+      const auto = ev["xaxis.autorange"];
+      if (a === undefined && auto === undefined) return;
+      lock = true;
+      Promise.all(gds.filter((o) => o !== gd).map((o) =>
+        Plotly.relayout(o, auto ? { "xaxis.autorange": true }
+                                : { "xaxis.range[0]": a, "xaxis.range[1]": b })))
+        .finally(() => { lock = false; });
+    });
+    gd.on("plotly_hover", (ev) => {
+      if (lock || !ev.points || !ev.points.length) return;
+      const x = ev.points[0].x;
+      gds.forEach((o) => {
+        if (o !== gd) try { Plotly.Fx.hover(o, { xval: x }); } catch (e) { /* pestaña oculta */ }
+      });
+    });
+    gd.on("plotly_unhover", () => {
+      gds.forEach((o) => {
+        if (o !== gd) try { Plotly.Fx.unhover(o); } catch (e) { /* pestaña oculta */ }
+      });
+    });
+  });
+}
+
 const skeleton = (hs) => {
   $view.innerHTML = "";
   hs.forEach((h) => $view.appendChild(el(`<div class="skeleton-block" style="height:${h}px"></div>`)));
@@ -670,17 +703,21 @@ async function renderPilotos(zone) {
   state.telSel = d.drivers.map((x) => x.code);
   zone.innerHTML = "";
 
-  const secNav = el(`<div class="pills" style="margin-bottom:14px">
-    <button class="pill">↓ RITMO DE SESIÓN</button>
-    <button class="pill">↓ TELEMETRÍA</button>
-    <button class="pill">↓ FÍSICA</button>
-    <button class="pill">↓ REPLAY</button></div>`);
-  const [b1, b2, b3, b4] = secNav.querySelectorAll("button");
-  b1.onclick = () => document.getElementById("sec-ritmo")?.scrollIntoView({ behavior: "smooth" });
-  b2.onclick = () => document.getElementById("sec-tel")?.scrollIntoView({ behavior: "smooth" });
-  b3.onclick = () => document.getElementById("sec-fis")?.scrollIntoView({ behavior: "smooth" });
-  b4.onclick = () => document.getElementById("sec-replay")?.scrollIntoView({ behavior: "smooth" });
-  zone.appendChild(secNav);
+  // cabecera de misión: identidad de la sesión + estado de los datos
+  const ronda = (() => {
+    try {
+      const ev = (state.schedCache[state.telYear].events || []).find((e) => e.gp === state.telGp);
+      return ev ? ev.round : null;
+    } catch (e) { return null; }
+  })();
+  zone.appendChild(el(`<div class="mission card">
+    <div>
+      <div class="kicker">SESSION ANALYSIS${ronda ? ` / R${ronda}` : ""} · ${state.telYear}</div>
+      <h3>${banderaGP(state.telGp)} ${state.telGp.replace(" Grand Prix", "")}</h3>
+      <div class="meta">${state.telSes} · ${d.drivers.length} coches en análisis · referencia ${d.ref}</div>
+    </div>
+    <div class="status"><i></i>DATA READY</div>
+  </div>`));
 
   const chipsCard = el(`<div class="card" style="margin-bottom:18px">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">
@@ -726,8 +763,43 @@ async function renderPilotos(zone) {
     chipsWrap.appendChild(chip);
   });
   zone.appendChild(chipsCard);
-  drawSessionStats(zone, ss, state.telSel);
-  drawTelCharts(zone, d);
+
+  // ── pestañas reales: solo se muestra la activa (adiós al documento infinito)
+  const TABS = [["resumen", "RESUMEN"], ["ritmo", "RITMO"], ["estrategia", "ESTRATEGIA"],
+                ["telemetria", "TELEMETRÍA"], ["fisica", "FÍSICA"], ["replay", "REPLAY"]];
+  if (!TABS.some(([k]) => k === state.anaTab)) state.anaTab = "resumen";
+  const bar = el(`<div class="ana-tabs">${TABS.map(([k, t]) =>
+    `<button class="ana-tab ${state.anaTab === k ? "active" : ""}" data-tab="${k}">${t}</button>`).join("")}</div>`);
+  zone.appendChild(bar);
+
+  const wraps = {};
+  TABS.forEach(([k]) => { wraps[k] = el(`<div></div>`); zone.appendChild(wraps[k]); });
+  const SS = { resumen: el(`<div></div>`), ritmo: el(`<div></div>`), estrategia: el(`<div></div>`) };
+  const TL = { resumen: el(`<div></div>`), telemetria: el(`<div></div>`),
+               fisica: el(`<div></div>`), replay: el(`<div></div>`) };
+  wraps.resumen.append(SS.resumen, TL.resumen);
+  wraps.ritmo.append(SS.ritmo);
+  wraps.estrategia.append(SS.estrategia);
+  wraps.telemetria.append(TL.telemetria);
+  wraps.fisica.append(TL.fisica);
+  wraps.replay.append(TL.replay);
+
+  const activar = (k) => {
+    state.anaTab = k;
+    bar.querySelectorAll(".ana-tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === k));
+    TABS.forEach(([t]) => { wraps[t].style.display = t === k ? "" : "none"; });
+    // las gráficas dibujadas mientras su pestaña estaba oculta salen sin ancho: reajustar
+    wraps[k].querySelectorAll(".js-plotly-plot").forEach((p) => {
+      try { Plotly.Plots.resize(p); } catch (e) { /* aún sin dibujar */ }
+    });
+  };
+  bar.querySelectorAll(".ana-tab").forEach((b) => { b.onclick = () => activar(b.dataset.tab); });
+
+  // dibujar TODO con las zonas visibles (Plotly necesita ancho real)…
+  drawSessionStats(SS, ss, state.telSel);
+  drawTelCharts(TL.telemetria, d, TL);
+  // …y recién entonces encender la pestaña activa
+  activar(state.anaTab);
 }
 
 async function renderVsLaps(zone) {
@@ -780,7 +852,10 @@ async function renderVsLaps(zone) {
   drawTelCharts(chartsZone, d);
 }
 
-function drawTelCharts(zone, d) {
+function drawTelCharts(zone, d, Z = null) {
+  // enrutador de pestañas: sin Z (modo vs-vueltas) todo cae en la misma zona
+  const T = Z || { resumen: zone, telemetria: zone, fisica: zone, replay: zone };
+  const SYNC = [];   // gráficas vs distancia: zoom y cursor compartidos
   const cornerAxis = {
     tickvals: d.corners.map((c) => c.d), ticktext: d.corners.map((c) => String(c.n)),
     tickfont: { size: 9.5, color: "#6b7280" }, title: { text: "CURVA", font: { size: 10 } },
@@ -805,7 +880,7 @@ function drawTelCharts(zone, d) {
   const DASHES = ["solid", "dash", "dot", "longdash", "dashdot"];
   const lapLabels = d.drivers.map((x) => `${x.code} ${x.lap_label} (V${x.lap_number})`).join(" · ");
 
-  zone.appendChild(el(`<div class="section-title" id="sec-tel">Telemetría de vuelta</div>`));
+  T.telemetria.appendChild(el(`<div class="section-title" id="sec-tel">Telemetría de vuelta</div>`));
 
   // circuito: trazado real por GPS coloreado por velocidad (vuelta de referencia)
   const refC = d.drivers[0];
@@ -827,8 +902,8 @@ function drawTelCharts(zone, d) {
              "Los números son las curvas oficiales; el rombo blanco es la línea de meta y la flecha marca el sentido de giro.",
              "Crúzalo con el mapa de dominancia: quien gana los tramos rojos tiene el coche 'mecánico'; quien gana los azules, el aerodinámico."],
     });
-    zone.appendChild(cCir.card);
-    zone.appendChild(el(`<div style="height:18px"></div>`));
+    T.resumen.appendChild(cCir.card);
+    T.resumen.appendChild(el(`<div style="height:18px"></div>`));
     const nC = refC.x.length;
     const iA = Math.floor(nC * 0.03), iB = Math.floor(nC * 0.055);
     Plotly.newPlot(cCir.plot, [
@@ -861,7 +936,7 @@ function drawTelCharts(zone, d) {
   }
 
   if (d.dtw && d.dtw.length) {
-    zone.appendChild(el(`<div class="card" style="margin-bottom:18px">
+    T.telemetria.appendChild(el(`<div class="card" style="margin-bottom:18px">
       <div class="chart-head" style="padding:0 0 4px"><h2>Similitud DTW · ¿qué tan parecidas son las vueltas?</h2>
         <span class="sub">vs ${d.ref} · menor = más parecida</span></div>
       ${d.dtw.map((x) => `<div class="chart-summary" style="margin:8px 0 0">
@@ -875,7 +950,7 @@ function drawTelCharts(zone, d) {
 
   // fila 1: mapa de dominancia + G-G
   const row1 = el(`<div class="grid cols-2" style="margin-bottom:18px"></div>`);
-  zone.appendChild(row1);
+  T.fisica.appendChild(row1);
 
   const cMap = chartCard({
     title: "Mapa de dominancia", sub: "color = quién gana cada mini-sector",
@@ -971,7 +1046,7 @@ function drawTelCharts(zone, d) {
       return `<div class="ms-sector"><div class="ms-head"><b>${sc.label}</b>
         <span>gana ${sc.winner} +${sc.margin.toFixed(3)}s</span></div>${rows}</div>`;
     }).join("");
-    zone.appendChild(el(`<div class="card chart-card" style="margin-bottom:18px">
+    T.telemetria.appendChild(el(`<div class="card chart-card" style="margin-bottom:18px">
       <div class="chart-head"><h2>Micro-sectores</h2>
         <span class="sub">morado = más rápido · verde = empate (&lt;0.02s) · amarillo = más lento</span></div>
       <div style="padding:8px 18px 2px"><div class="ms-wrap">${lbls}${secs}</div></div>
@@ -991,20 +1066,21 @@ function drawTelCharts(zone, d) {
            "<b>¿Valle más estrecho en una curva?</b> → frena más tarde y suelta antes: ahí gana el tiempo.",
            "Las líneas verticales tenues separan los sectores S1/S2/S3."],
   });
-  zone.appendChild(cVel.card);
+  T.telemetria.appendChild(cVel.card);
   Plotly.newPlot(cVel.plot, d.drivers.map((x, i) => ({
     type: "scatter", mode: "lines", name: x.code, x: x.d, y: x.speed,
     line: { color: x.color, width: 1.9, dash: DASHES[i % DASHES.length] },
     hovertemplate: `<b>${x.code}</b> · %{y:.0f} km/h<extra></extra>`,
   })), baseLayout({
-    height: 600, hovermode: "x unified", shapes: sectorShapes,
+    height: 480, hovermode: "x unified", shapes: sectorShapes,
     annotations: [...sectorAnnots, ...winnerAnnots, ...zoneAnnots],
     margin: { l: 56, r: 14, t: 42, b: 48 },
     xaxis: { ...baseLayout().xaxis, ...cornerAxis },
     yaxis: { ...baseLayout().yaxis, title: { text: "KM/H", font: { size: 10 } } },
     legend: { orientation: "h", y: 1.08, x: 1, xanchor: "right" },
   }), PLOTLY_CFG);
-  zone.appendChild(el(`<div style="height:18px"></div>`));
+  SYNC.push(cVel.plot);
+  T.telemetria.appendChild(el(`<div style="height:18px"></div>`));
 
   // DELTA (si hay 2+ pilotos)
   const conDelta = d.drivers.filter((x) => x.delta);
@@ -1016,13 +1092,13 @@ function drawTelCharts(zone, d) {
              "<b>¿Sube de golpe en una curva?</b> → ahí lo pierde: compara la frenada en esa zona.",
              "El valor al final de la vuelta es la diferencia total de la vuelta rápida."],
     });
-    zone.appendChild(cDelta.card);
+    T.telemetria.appendChild(cDelta.card);
     Plotly.newPlot(cDelta.plot, conDelta.map((x) => ({
       type: "scatter", mode: "lines", name: `Δ ${x.code}`, x: x.delta_d, y: x.delta,
       line: { color: x.color, width: 2 },
       hovertemplate: `<b>${x.code}</b> · Δ %{y:+.3f}s<extra></extra>`,
     })), baseLayout({
-      height: 500, hovermode: "x unified", shapes: sectorShapes,
+      height: 340, hovermode: "x unified", shapes: sectorShapes,
       annotations: sectorAnnots,
       margin: { l: 56, r: 14, t: 30, b: 48 },
       xaxis: { ...baseLayout().xaxis, ...cornerAxis },
@@ -1030,25 +1106,27 @@ function drawTelCharts(zone, d) {
                zeroline: true, zerolinecolor: accLine(0.5), zerolinewidth: 1.5 },
       legend: { orientation: "h", y: 1.1, x: 1, xanchor: "right" },
     }), PLOTLY_CFG);
-    zone.appendChild(el(`<div style="height:18px"></div>`));
+    SYNC.push(cDelta.plot);
+    T.telemetria.appendChild(el(`<div style="height:18px"></div>`));
   }
 
   // canales a ANCHO COMPLETO (aquí se ven las diferencias finas)
   const mkChannel = (title, key, ytitle, tips, summary) => {
     const c = chartCard({ title, sub: "vs distancia · " + lapLabels, tips, summary });
-    zone.appendChild(c.card);
-    zone.appendChild(el(`<div style="height:18px"></div>`));
+    T.telemetria.appendChild(c.card);
+    T.telemetria.appendChild(el(`<div style="height:18px"></div>`));
     Plotly.newPlot(c.plot, d.drivers.map((x) => ({
       type: "scatter", mode: "lines", name: x.code, x: x.d, y: x[key],
       line: { color: x.color, width: 1.6 },
       hovertemplate: `<b>${x.code}</b> · %{y:.0f}${key === "gear" ? "ª" : "%"}<extra></extra>`,
     })), baseLayout({
-      height: 420, hovermode: "x unified", shapes: sectorShapes,
+      height: 260, hovermode: "x unified", shapes: sectorShapes,
       margin: { l: 50, r: 12, t: 12, b: 44 },
       xaxis: { ...baseLayout().xaxis, ...cornerAxis },
       yaxis: { ...baseLayout().yaxis, title: { text: ytitle, font: { size: 10 } } },
       legend: { orientation: "h", y: 1.08, x: 1, xanchor: "right" },
     }), PLOTLY_CFG);
+    SYNC.push(c.plot);
   };
   mkChannel("Acelerador", "throttle", "% GAS",
     ["<b>¿Pisa a fondo antes que el otro a la salida de una curva?</b> → mejor tracción o más confianza; ahí nace la ventaja de la recta siguiente."],
@@ -1063,21 +1141,22 @@ function drawTelCharts(zone, d) {
     title: "Marchas", sub: "vs distancia",
     tips: ["<b>¿Cambia una marcha menos en la misma curva?</b> → relación más larga o toma la curva con más velocidad."],
   });
-  zone.appendChild(cGear.card);
-  zone.appendChild(el(`<div style="height:18px"></div>`));
+  T.telemetria.appendChild(cGear.card);
+  T.telemetria.appendChild(el(`<div style="height:18px"></div>`));
   Plotly.newPlot(cGear.plot, d.drivers.map((x) => ({
     type: "scatter", mode: "lines", name: x.code, x: x.d, y: x.gear,
     line: { color: x.color, width: 1.6, shape: "hv" },
     hovertemplate: `<b>${x.code}</b> · %{y}ª<extra></extra>`,
   })), baseLayout({
-    height: 400, hovermode: "x unified", shapes: sectorShapes,
+    height: 260, hovermode: "x unified", shapes: sectorShapes,
     margin: { l: 50, r: 12, t: 12, b: 44 },
     xaxis: { ...baseLayout().xaxis, ...cornerAxis },
     yaxis: { ...baseLayout().yaxis, title: { text: "MARCHA", font: { size: 10 } }, dtick: 1 },
     legend: { orientation: "h", y: 1.08, x: 1, xanchor: "right" },
   }), PLOTLY_CFG);
 
-  zone.appendChild(el(`<div class="section-title" id="sec-fis">Física del coche</div>`));
+  SYNC.push(cGear.plot);
+  T.fisica.appendChild(el(`<div class="section-title" id="sec-fis">Física del coche</div>`));
 
   // FUERZA G LONGITUDINAL vs distancia
   const cGl = chartCard({
@@ -1085,14 +1164,14 @@ function drawTelCharts(zone, d) {
     tips: ["<b>¿Picos hacia abajo de -4/-5G?</b> → las grandes frenadas del circuito; compara qué tan tarde y fuerte frena cada uno.",
            "<b>¿Meseta positiva suave?</b> → tracción a la salida: ahí se nota el motor y el agarre trasero."],
   });
-  zone.appendChild(cGl.card);
-  zone.appendChild(el(`<div style="height:18px"></div>`));
+  T.fisica.appendChild(cGl.card);
+  T.fisica.appendChild(el(`<div style="height:18px"></div>`));
   Plotly.newPlot(cGl.plot, d.drivers.map((x) => ({
     type: "scatter", mode: "lines", name: x.code, x: x.d, y: x.glong,
     line: { color: x.color, width: 1.6 },
     hovertemplate: `<b>${x.code}</b> · %{y:.2f} G<extra></extra>`,
   })), baseLayout({
-    height: 400, hovermode: "x unified", shapes: sectorShapes,
+    height: 340, hovermode: "x unified", shapes: sectorShapes,
     margin: { l: 50, r: 12, t: 12, b: 44 },
     xaxis: { ...baseLayout().xaxis, ...cornerAxis },
     yaxis: { ...baseLayout().yaxis, title: { text: "G LONGITUDINAL", font: { size: 10 } },
@@ -1107,8 +1186,9 @@ function drawTelCharts(zone, d) {
            "<b>¿Una curva de tendencia más alta a media velocidad?</b> → ese coche despliega más energía saliendo de curvas.",
            "Cada punto = una muestra con gas ≥95%, sin freno y sin carga lateral."],
   });
-  zone.appendChild(cErs.card);
-  zone.appendChild(el(`<div style="height:18px"></div>`));
+  SYNC.push(cGl.plot);
+  T.fisica.appendChild(cErs.card);
+  T.fisica.appendChild(el(`<div style="height:18px"></div>`));
   const ersTraces = [];
   d.drivers.forEach((x) => {
     const xs = [], ys = [];
@@ -1143,7 +1223,7 @@ function drawTelCharts(zone, d) {
     tips: ["<b>¿Más % a fondo?</b> → o el coche permite pisar antes, o el circuito se lo pide y el motor manda.",
            "<b>¿Más % en curva que el rival?</b> → pasa más tiempo gestionando el paso por curva: ahí se decide su vuelta."],
   });
-  zone.appendChild(cPh.card);
+  T.fisica.appendChild(cPh.card);
   const phSeries = [
     { key: "fondo", name: "A fondo", color: "#2ECC71" },
     { key: "frenada", name: "Frenada", color: "#FF5252" },
@@ -1165,8 +1245,9 @@ function drawTelCharts(zone, d) {
     legend: { orientation: "h", y: 1.14, x: 0.5, xanchor: "center" },
   }), PLOTLY_CFG);
 
-  zone.appendChild(el(`<div style="height:18px"></div>`));
-  drawReplay(zone, d);
+  T.fisica.appendChild(el(`<div style="height:18px"></div>`));
+  sincronizaX(SYNC);
+  drawReplay(T.replay, d);
 }
 
 
@@ -1495,11 +1576,9 @@ function timeTicks(vals) {
   return { tickvals: ticks, ticktext: ticks.map(fmtLap) };
 }
 
-function drawSessionStats(zone, ss, sel) {
-  const cont = el(`<div></div>`);
-  zone.appendChild(cont);
+function drawSessionStats(Zss, ss, sel) {
   const render = () => {
-    cont.innerHTML = "";
+    Object.values(Zss).forEach((z) => { z.innerHTML = ""; });
     const usarSel = !state.ritmoAll && sel && sel.length;
     const f = (arr) => (usarSel ? (arr || []).filter((x) => sel.includes(x.code)) : (arr || []));
     const ss2 = { ...ss, box: f(ss.box), cv: f(ss.cv), evo: f(ss.evo),
@@ -1511,13 +1590,13 @@ function drawSessionStats(zone, ss, sel) {
         ? { drivers: idx.map(([c]) => c), laps: ss.trap.laps, z: idx.map(([, i]) => ss.trap.z[i]) }
         : null;
     }
-    drawSessionStatsInner(cont, ss2, render);
+    drawSessionStatsInner(Zss, ss2, render);
   };
   render();
 }
 
-function drawSessionStatsInner(zone, ss, rerender) {
-  zone.appendChild(el(`<div class="section-title" id="sec-ritmo">Ritmo de sesión
+function drawSessionStatsInner(Z, ss, rerender) {
+  Z.ritmo.appendChild(el(`<div class="section-title" id="sec-ritmo">Ritmo de sesión
     <small> · ${ss.session} · toda la sesión, no solo la vuelta rápida</small></div>`));
   const tg = el(`<div class="pills" style="margin-bottom:14px">
     <button class="pill ${!state.ritmoAll ? "active" : ""}">PILOTOS SELECCIONADOS</button>
@@ -1525,7 +1604,7 @@ function drawSessionStatsInner(zone, ss, rerender) {
   const [tgA, tgB] = tg.querySelectorAll("button");
   tgA.onclick = () => { state.ritmoAll = false; rerender(); };
   tgB.onclick = () => { state.ritmoAll = true; rerender(); };
-  zone.appendChild(tg);
+  Z.ritmo.appendChild(tg);
 
   let sumRitmo = "";
   if (ss.cv.length) {
@@ -1540,7 +1619,7 @@ function drawSessionStatsInner(zone, ss, rerender) {
   if (ss.cv.length) {
     const rapido = [...ss.cv].sort((a, b) => a.median - b.median)[0];
     const consistente = ss.cv[0];
-    zone.appendChild(el(`<div class="tiles" style="margin-bottom:18px">
+    Z.resumen.appendChild(el(`<div class="tiles" style="margin-bottom:18px">
       <div class="card tile" style="--tc:${rapido.color}"><div class="label">Mejor ritmo (mediana)</div>
         <div class="value">${rapido.code}</div><div class="hint">${rapido.median_label} · ${rapido.laps} vueltas limpias</div></div>
       <div class="card tile" style="--tc:${consistente.color}"><div class="label">Más consistente</div>
@@ -1552,13 +1631,13 @@ function drawSessionStatsInner(zone, ss, rerender) {
 
   // tablero de qualy
   if (ss.quali && ss.quali.length) {
-    zone.appendChild(el(`<div class="section-title">Clasificación Q1 · Q2 · Q3
+    Z.resumen.appendChild(el(`<div class="section-title">Clasificación Q1 · Q2 · Q3
       <small> · ${ss.summaries.quali || ""}</small></div>`));
     const rows = ss.quali.map((r) => `<tr><td class="num">${r.pos ?? "—"}</td>
       <td>${drvChip(r.code, r.color)}</td>
       <td class="num">${r.q1}</td><td class="num">${r.q2}</td><td class="num">${r.q3}</td>
       <td class="num"><b>${r.gap}</b></td><td>${r.corte}</td></tr>`).join("");
-    zone.appendChild(el(`<div class="card table-wrap" style="margin-bottom:18px"><table>
+    Z.resumen.appendChild(el(`<div class="card table-wrap" style="margin-bottom:18px"><table>
       <thead><tr><th class="num">Pos</th><th>Piloto</th><th class="num">Q1</th>
       <th class="num">Q2</th><th class="num">Q3</th><th class="num">Gap</th><th>Corte</th></tr></thead>
       <tbody>${rows}</tbody></table></div>`));
@@ -1579,8 +1658,8 @@ function drawSessionStatsInner(zone, ss, rerender) {
         <span class="chip" style="--cc:#fff"><i></i>◆ pit</span>
         <button class="pill" id="evoTgl" style="margin-left:auto">${state.evoOut === true ? "OCULTAR ATÍPICAS" : "MOSTRAR ATÍPICAS"}</button></div>`,
     });
-    zone.appendChild(cEvo.card);
-    zone.appendChild(el(`<div style="height:20px"></div>`));
+    Z.ritmo.appendChild(cEvo.card);
+    Z.ritmo.appendChild(el(`<div style="height:20px"></div>`));
     cEvo.card.querySelector("#evoTgl").onclick = () => {
       state.evoOut = state.evoOut !== true;
       rerender();
@@ -1646,8 +1725,8 @@ function drawSessionStatsInner(zone, ss, rerender) {
       tips: ["<b>¿Cae varias posiciones de golpe?</b> → pit stop; mira si las recupera.",
              "<b>¿Cruces constantes?</b> → batalla real en pista."],
     });
-    zone.appendChild(cLp.card);
-    zone.appendChild(el(`<div style="height:20px"></div>`));
+    Z.ritmo.appendChild(cLp.card);
+    Z.ritmo.appendChild(el(`<div style="height:20px"></div>`));
     Plotly.newPlot(cLp.plot, ss.positions.map((x) => ({
       type: "scatter", mode: "lines", name: x.code, x: x.laps, y: x.pos,
       line: { color: x.color, width: 2 },
@@ -1667,8 +1746,8 @@ function drawSessionStatsInner(zone, ss, rerender) {
         tips: ["<b>¿Se comprimen todas las líneas?</b> → coche de seguridad: el pelotón se reagrupa.",
                "<b>¿Escalón de ~20s hacia arriba?</b> → pit stop."],
       });
-      zone.appendChild(cGp.card);
-      zone.appendChild(el(`<div style="height:20px"></div>`));
+      Z.ritmo.appendChild(cGp.card);
+      Z.ritmo.appendChild(el(`<div style="height:20px"></div>`));
       Plotly.newPlot(cGp.plot, ss.gaps.map((x) => ({
         type: "scatter", mode: "lines", name: x.code, x: x.laps, y: x.gap,
         line: { color: x.color, width: 2 },
@@ -1698,8 +1777,8 @@ function drawSessionStatsInner(zone, ss, rerender) {
              "<b>¿Puntos sueltos lejos de la caja?</b> → vueltas raras que sobrevivieron al filtro: tráfico o goma muerta.",
              "Comparar MEDIANAS es más honesto que comparar la mejor vuelta."],
     });
-    zone.appendChild(cBox.card);
-    zone.appendChild(el(`<div style="height:20px"></div>`));
+    Z.ritmo.appendChild(cBox.card);
+    Z.ritmo.appendChild(el(`<div style="height:20px"></div>`));
     const tt = timeTicks(ss.box.flatMap((b) => b.times));
     Plotly.newPlot(cBox.plot, orden.map((b) => ({
       type: "box", y: b.times, name: b.code,
@@ -1733,7 +1812,7 @@ function drawSessionStatsInner(zone, ss, rerender) {
         <td class="num">${r.iqr.toFixed(3)}</td>
         <td class="num"><b style="color:${c}">${r.cv.toFixed(2)}%</b> <small style="color:${c}">${t}</small></td></tr>`;
     }).join("");
-    zone.appendChild(el(`<div class="card table-wrap" style="margin-bottom:20px">
+    Z.ritmo.appendChild(el(`<div class="card table-wrap" style="margin-bottom:20px">
       <div class="chart-head" style="padding:0 0 8px">
       <h2>Consistencia (CV)</h2><span class="sub">CV = σ / mediana · menor = más regular</span></div>
       <table><thead><tr><th>Piloto</th><th class="num">Vueltas</th><th class="num">Mediana</th>
@@ -1744,7 +1823,7 @@ function drawSessionStatsInner(zone, ss, rerender) {
   // RESUMEN DE RITMO: tarjetas por piloto (vueltas limpias)
   if (ss.cv.length) {
     const mejor = Math.min(...ss.cv.map((r) => r.median));
-    zone.appendChild(el(`<div class="section-title">Resumen de ritmo
+    Z.resumen.appendChild(el(`<div class="section-title">Resumen de ritmo
       <small> · vueltas limpias por piloto (sin pits ni atípicas)</small></div>`));
     const cards = [...ss.cv].sort((a, b) => a.median - b.median).map((r) => `
       <div class="card tile" style="--tc:${r.color}">
@@ -1753,7 +1832,7 @@ function drawSessionStatsInner(zone, ss, rerender) {
         <div class="hint">${r.median === mejor ? "MEJOR RITMO" : `+${(r.median - mejor).toFixed(3)}s vs mejor`}
           · ${r.laps} vueltas<br>σ ${r.sigma.toFixed(3)} · IQR ${r.iqr.toFixed(3)}</div>
       </div>`).join("");
-    zone.appendChild(el(`<div class="tiles" style="margin-bottom:20px">${cards}</div>`));
+    Z.resumen.appendChild(el(`<div class="tiles" style="margin-bottom:20px">${cards}</div>`));
   }
 
   // ritmo corregido por combustible (solo carrera) con slider
@@ -1764,7 +1843,7 @@ function drawSessionStatsInner(zone, ss, rerender) {
              "<b>¿Sigue subiendo?</b> → degradación real del neumático.",
              "Mueve el deslizador: ~0.035 s/vuelta es lo típico por quema de combustible."],
     });
-    zone.appendChild(cFuel.card);
+    Z.ritmo.appendChild(cFuel.card);
     const ctl = el(`<div style="padding:0 18px 10px;display:flex;gap:12px;align-items:center">
       <span style="font-size:11px;color:var(--ink3)">CORRECCIÓN</span>
       <input type="range" min="0" max="0.08" step="0.005" value="0.035" style="flex:1;max-width:340px">
@@ -1791,7 +1870,7 @@ function drawSessionStatsInner(zone, ss, rerender) {
       drawFuel(+e2.target.value);
     };
     drawFuel(0.035);
-    zone.appendChild(el(`<div style="height:18px"></div>`));
+    Z.ritmo.appendChild(el(`<div style="height:18px"></div>`));
   }
 
   // MURO DE PITS (componente compartido con CARRERA)
@@ -1834,7 +1913,7 @@ function drawSessionStatsInner(zone, ss, rerender) {
                segs, stops: info ? info.stops : [],
                totalLost: info ? info.total_lost : null };
     });
-    zone.appendChild(cardMuroPits({ rows, summary: resumenPits }));
+    Z.estrategia.appendChild(cardMuroPits({ rows, summary: resumenPits }));
   }
 
   // degradación por stint: filtro de compuesto + gráfica + tabla
@@ -1848,13 +1927,13 @@ function drawSessionStatsInner(zone, ss, rerender) {
         data-c="${c}" style="--cc:${COMP_COLORS[c] || "#6b7280"}">${c}</button>`).join("")}</div>`;
     ss.deg = degSel;
     const peor = [...ss.deg].sort((a, b) => b.slope - a.slope)[0];
-    zone.appendChild(el(`<div class="section-title">Análisis de stint y degradación
+    Z.estrategia.appendChild(el(`<div class="section-title">Análisis de stint y degradación
       <small> · Mayor degradación: ${peor.code} en el stint ${peor.stint} (${peor.compound}): +${(peor.slope * 1000).toFixed(0)} ms/vuelta</small></div>`));
     const pillsEl = el(fpills);
     pillsEl.querySelectorAll("[data-c]").forEach((b) => {
       b.onclick = () => { state.compFilter = b.dataset.c || null; rerender(); };
     });
-    zone.appendChild(pillsEl);
+    Z.estrategia.appendChild(pillsEl);
 
     // ritmo mediano por stint (marcador = compuesto, línea = piloto)
     const cSt = chartCard({
@@ -1862,8 +1941,8 @@ function drawSessionStatsInner(zone, ss, rerender) {
       tips: ["<b>¿El punto siguiente más abajo?</b> → mejoró con la goma nueva o el coche más ligero.",
              "<b>¿Puntos del mismo compuesto a alturas distintas entre pilotos?</b> → gestión, no goma."],
     });
-    zone.appendChild(cSt.card);
-    zone.appendChild(el(`<div style="height:20px"></div>`));
+    Z.estrategia.appendChild(cSt.card);
+    Z.estrategia.appendChild(el(`<div style="height:20px"></div>`));
     const porPiloto = {};
     degSel.forEach((r) => { (porPiloto[r.code] = porPiloto[r.code] || []).push(r); });
     const stTraces = Object.entries(porPiloto).map(([code, rows]) => ({
@@ -1894,8 +1973,8 @@ function drawSessionStatsInner(zone, ss, rerender) {
       tips: ["<b>¿Barra verde larga?</b> → gran remontada: salió atrás y acabó delante.",
              "<b>¿Roja larga?</b> → mal día: problema mecánico, sanción o mala estrategia."],
     });
-    zone.appendChild(cGr.card);
-    zone.appendChild(el(`<div style="height:18px"></div>`));
+    Z.estrategia.appendChild(cGr.card);
+    Z.estrategia.appendChild(el(`<div style="height:18px"></div>`));
     const g = [...ss.grid].reverse();
     Plotly.newPlot(cGr.plot, [{
       type: "bar", orientation: "h",
@@ -1926,8 +2005,8 @@ function drawSessionStatsInner(zone, ss, rerender) {
              "<b>¿Columna entera fría?</b> → vuelta lenta de todos: SC o lluvia.",
              "<b>¿Un punto rojo aislado?</b> → rebufo perfecto o DRS en esa vuelta."],
     });
-    zone.appendChild(cTr.card);
-    zone.appendChild(el(`<div style="height:18px"></div>`));
+    Z.ritmo.appendChild(cTr.card);
+    Z.ritmo.appendChild(el(`<div style="height:18px"></div>`));
     const planos = ss.trap.z.flat().filter((v) => v != null).sort((a, b) => a - b);
     const zmin = planos[Math.floor(planos.length * 0.04)] || 0;
     Plotly.newPlot(cTr.plot, [{
@@ -1963,7 +2042,7 @@ function drawSessionStatsInner(zone, ss, rerender) {
       const st = p.out ? "text-decoration:line-through;color:var(--ink3)" : "";
       return `<td class="num" style="${st}"><span style="color:${COMP_COLORS[p.comp] || "#6b7280"}">●</span> ${fmtLap(p.t)}${p.pit ? " ◆" : ""}</td>`;
     }).join("")}</tr>`).join("");
-    zone.appendChild(el(`<details class="card" style="margin-bottom:20px">
+    Z.ritmo.appendChild(el(`<details class="card" style="margin-bottom:20px">
       <summary style="cursor:pointer;font-weight:800;font-size:12.5px;letter-spacing:1.4px">
         TIEMPOS POR VUELTA (TABLA) · ● compuesto · ◆ pit · tachado = atípica</summary>
       <div class="table-wrap" style="margin-top:12px;max-height:560px;overflow:auto">

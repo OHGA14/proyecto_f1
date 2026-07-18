@@ -593,3 +593,44 @@ html[data-theme="spacex"] .btn-red { border-radius: 3px; }
   z-index: 1;
 }
 .pit-badge small { font-weight: 700; color: #ff8181; font-size: 9px; }
+
+/* ─────────────────────────────────────── ANÁLISIS: pestañas + misión */
+.ana-tabs {
+  display: flex; gap: 26px; flex-wrap: wrap;
+  border-bottom: 1px solid var(--border);
+  margin: 4px 0 20px;
+}
+.ana-tab {
+  background: none; border: none; cursor: pointer;
+  color: var(--ink2); font: inherit; font-size: 12.5px; font-weight: 700;
+  letter-spacing: 2.2px; text-transform: uppercase;
+  padding: 10px 2px; margin-bottom: -1px;
+  border-bottom: 2px solid transparent;
+  transition: color .15s, border-color .15s;
+}
+.ana-tab:hover { color: var(--ink); }
+.ana-tab.active { color: var(--ink); border-bottom-color: var(--red); }
+
+.mission {
+  display: flex; justify-content: space-between; align-items: flex-end;
+  gap: 18px; flex-wrap: wrap; margin-bottom: 18px;
+}
+.mission .kicker { font-size: 10px; letter-spacing: 3px; color: var(--ink3); font-weight: 700; }
+.mission h3 {
+  font-family: var(--font-display);
+  font-size: clamp(28px, 3.4vw, 46px); font-weight: 800;
+  letter-spacing: 1.5px; text-transform: uppercase; line-height: 1;
+  margin-top: 8px;
+}
+.mission .meta { font-size: 12px; color: var(--ink2); letter-spacing: 1.6px; text-transform: uppercase; margin-top: 8px; }
+.mission .status {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 11px; letter-spacing: 2.2px; font-weight: 700; color: #2ecc71;
+  border: 1px solid rgba(46, 204, 113, .35); border-radius: 3px;
+  padding: 7px 14px; white-space: nowrap;
+}
+.mission .status i {
+  width: 7px; height: 7px; border-radius: 50%; background: #2ecc71;
+  box-shadow: 0 0 8px rgba(46, 204, 113, .8);
+  animation: pulse 1.6s ease-in-out infinite;
+}
