@@ -1952,30 +1952,58 @@ function drawReplay(zone, d) {
   const cars = d.drivers.filter((x) => x.x && x.x.length && x.lap_time);
   if (cars.length < 1) return;
 
+  const ref = cars[0];
+  const refD = ref.d[ref.d.length - 1];
+  // los tiempos vienen CALIBRADOS al oficial desde el backend: t[fin] = LapTime
+  const Tmax = Math.max(...cars.map((c) => c.t[c.t.length - 1]));
+  const prog = (car, dist) => dist / car.d[car.d.length - 1];
+
+  // resumen deportivo calculado (no ficha técnica) + calidad de sincronización
+  const curvaCerca = (dist) => {
+    if (!(d.corners || []).length) return "";
+    const c2 = d.corners.reduce((p, q) => (Math.abs(q.d - dist) < Math.abs(p.d - dist) ? q : p));
+    return `T${c2.n}`;
+  };
+  let resumenRep = `El gap de cada tarjeta es tiempo real contra ${d.ref} al MISMO progreso de vuelta.`;
+  const r1 = cars[1];
+  if (r1 && r1.delta && r1.lap_time && ref.lap_time) {
+    const df = r1.lap_time - ref.lap_time;
+    const quien = df <= 0 ? r1.code : ref.code;
+    const iMx = r1.delta.indexOf(Math.max(...r1.delta));
+    const iMn = r1.delta.indexOf(Math.min(...r1.delta));
+    resumenRep = `${quien} termina ${Math.abs(df * 1000).toFixed(0)} ms por delante. ` +
+      `Máxima ventaja de ${ref.code}: ${Math.max(0, r1.delta[iMx]).toFixed(2)}s cerca de ${curvaCerca(r1.delta_d[iMx])}; ` +
+      `máxima de ${r1.code}: ${Math.abs(Math.min(0, r1.delta[iMn])).toFixed(2)}s cerca de ${curvaCerca(r1.delta_d[iMn])}.`;
+  }
+  const cals = cars.filter((c) => c.t_cal_ms != null)
+    .map((c) => `${c.code} ${c.t_cal_ms >= 0 ? "+" : ""}${Math.round(c.t_cal_ms)} ms`);
+
   zone.appendChild(el(`<div class="section-title" id="sec-replay">Replay de vuelta
-    <small> · fantasmas sincronizados por tiempo real</small></div>`));
+    <small> · fantasmas sincronizados a los tiempos oficiales</small></div>`));
   const card = el(`<div class="card chart-card">
-    <div class="chart-head"><h2>Replay fantasma</h2>
-      <span class="sub">todos arrancan a la vez; el que va delante en pista, va delante en tiempo</span></div>
+    <div class="chart-head"><div class="chart-head-row"><h2>Replay fantasma</h2></div>
+      <span class="sub">todos arrancan a la vez; delante = mayor PROGRESO de vuelta (referencia común) · espacio = play · flechas = ±0.5s (shift ±5s)</span></div>
     <div style="padding:10px 18px 6px">
       <div class="replay-controls">
         <button class="btn-red" id="rpPlay">▶ PLAY</button>
         <select id="rpSpeed" style="padding:8px 34px 8px 12px">
-          <option value="0.5">0.5×</option><option value="1" selected>1×</option>
+          <option value="0.25">0.25×</option><option value="0.5">0.5×</option>
+          <option value="1" selected>1×</option>
           <option value="2">2×</option><option value="4">4×</option></select>
         <input type="range" id="rpScrub" min="0" max="1000" value="0" style="flex:1">
-        <b id="rpTime" style="font-variant-numeric:tabular-nums;min-width:64px;text-align:right">0.0s</b>
+        <b id="rpTime" style="font-variant-numeric:tabular-nums;min-width:104px;text-align:right">0.0 / ${Tmax.toFixed(1)}s</b>
       </div>
       <canvas id="rpCanvas" style="width:100%;display:block;border-radius:10px"></canvas>
       <div id="rpHud" class="replay-hud"></div>
       <canvas id="rpTele" style="width:100%;display:block;border-radius:10px;margin-top:10px"></canvas>
     </div>
-    <div class="chart-summary" style="margin-top:8px">Animación nativa en canvas (60 fps).
-      El gap de cada tarjeta es tiempo real contra ${d.ref} en ese punto de la pista.</div>
+    <div class="chart-summary" style="margin-top:8px">${resumenRep}</div>
+    ${cals.length ? `<div class="chart-summary warn">REPLAY SINCRONIZADO A TIEMPOS OFICIALES · corrección de integración aplicada: ${cals.join(" · ")}.</div>` : ""}
     <details class="chart-guide"><summary>¿Cómo leer esta gráfica?</summary><ul>
       <li><b>¿Un fantasma se acerca en las curvas y se aleja en las rectas?</b> → coche con más carga aerodinámica: gana en curva, paga en recta.</li>
-      <li><b>¿El gap crece de golpe en una zona?</b> → ahí está el error o la diferencia real; búscala en el delta y los micro-sectores.</li>
-      <li>Usa 0.5× para estudiar una frenada concreta y el deslizador para volver a verla.</li>
+      <li>El gap (segundos) es la métrica principal; los metros son su explicación espacial sobre la línea de la referencia.</li>
+      <li><b>¿El gap crece de golpe en una zona?</b> → búscala en la ventaja acumulada y los micro-sectores.</li>
+      <li>Usa 0.25× para estudiar una frenada; la estela siempre representa los últimos 1.2 s de vuelta, a cualquier velocidad.</li>
     </ul></details></div>`);
   zone.appendChild(card);
 
@@ -1986,14 +2014,28 @@ function drawReplay(zone, d) {
   const scrub = card.querySelector("#rpScrub");
   const lblT = card.querySelector("#rpTime");
 
-  const ref = cars[0];
-  const Tmax = Math.max(...cars.map((c) => c.t[c.t.length - 1]));
+  // línea de tiempo con cortes de sector (fracciones del tiempo de la ref)
+  if ((d.cuts || []).length === 2) {
+    const fDe = (dist) => {
+      let lo = 0, hi = ref.d.length - 1;
+      while (hi - lo > 1) { const m = (lo + hi) >> 1; (ref.d[m] <= dist ? lo = m : hi = m); }
+      return (ref.t[lo] / Tmax) * 100;
+    };
+    const [f1, f2] = d.cuts.map(fDe);
+    scrub.style.background = `linear-gradient(90deg,
+      rgba(255,255,255,.08) 0%, rgba(255,255,255,.08) ${f1 - 0.3}%,
+      rgba(255,255,255,.55) ${f1 - 0.3}%, rgba(255,255,255,.55) ${f1 + 0.3}%,
+      rgba(255,255,255,.08) ${f1 + 0.3}%, rgba(255,255,255,.08) ${f2 - 0.3}%,
+      rgba(255,255,255,.55) ${f2 - 0.3}%, rgba(255,255,255,.55) ${f2 + 0.3}%,
+      rgba(255,255,255,.08) ${f2 + 0.3}%, rgba(255,255,255,.08) 100%)`;
+  }
 
-  // mundo → pantalla
+  // mundo → pantalla (DPR limitado a 2: retina x3 triplicaba la memoria)
   const xs = ref.x, ys = ref.y;
   const minX = Math.min(...xs), maxX = Math.max(...xs);
   const minY = Math.min(...ys), maxY = Math.max(...ys);
-  let W = 800, H = 560, k = 1, ox = 0, oy = 0, dpr = window.devicePixelRatio || 1;
+  let W = 800, H = 560, k = 1, ox = 0, oy = 0;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
   const fit = () => {
     W = canvas.clientWidth || 800;
     const aspecto = (maxY - minY) / (maxX - minX);
@@ -2029,31 +2071,64 @@ function drawReplay(zone, d) {
   };
 
   // interpolación de posición por TIEMPO (búsqueda binaria)
-  const at = (car, tau) => {
+  const at = (car, tau2) => {
     const t = car.t;
-    if (tau >= t[t.length - 1]) {
+    if (tau2 >= t[t.length - 1]) {
       const i = t.length - 1;
       return { x: car.x[i], y: car.y[i], v: car.speed[i], dist: car.d[i], fin: true };
     }
     let lo = 0, hi = t.length - 1;
-    while (hi - lo > 1) { const m = (lo + hi) >> 1; (t[m] <= tau ? lo = m : hi = m); }
-    const f = (tau - t[lo]) / Math.max(t[hi] - t[lo], 1e-6);
+    while (hi - lo > 1) { const m = (lo + hi) >> 1; (t[m] <= tau2 ? lo = m : hi = m); }
+    const f = (tau2 - t[lo]) / Math.max(t[hi] - t[lo], 1e-6);
     const L = (a) => a[lo] + (a[hi] - a[lo]) * f;
     return { x: L(car.x), y: L(car.y), v: L(car.speed), dist: L(car.d), fin: false };
   };
-  // gap real vs referencia: mi tiempo aquí menos el tiempo de la ref en esta distancia
-  const gapVsRef = (car, tau, dist) => {
+  // gap vs referencia por PROGRESO COMÚN: cada trayectoria mide distinto,
+  // así que se compara a igual fracción de vuelta (cierra con los oficiales)
+  const gapVsRef = (car, tau2, dist) => {
     if (car === ref) return 0;
+    const dEq = prog(car, dist) * refD;
     let lo = 0, hi = ref.d.length - 1;
-    if (dist >= ref.d[hi]) return tau - ref.t[hi];
-    while (hi - lo > 1) { const m = (lo + hi) >> 1; (ref.d[m] <= dist ? lo = m : hi = m); }
-    const f = (dist - ref.d[lo]) / Math.max(ref.d[hi] - ref.d[lo], 1e-6);
-    return tau - (ref.t[lo] + (ref.t[hi] - ref.t[lo]) * f);
+    if (dEq >= ref.d[hi]) return tau2 - ref.t[hi];
+    while (hi - lo > 1) { const m = (lo + hi) >> 1; (ref.d[m] <= dEq ? lo = m : hi = m); }
+    const f = (dEq - ref.d[lo]) / Math.max(ref.d[hi] - ref.d[lo], 1e-6);
+    return tau2 - (ref.t[lo] + (ref.t[hi] - ref.t[lo]) * f);
   };
 
   const ctx = canvas.getContext("2d");
   const trails = new Map(cars.map((c) => [c.code, []]));
   let tau = 0, playing = false, last = null, raf = null, arrastrando = false;
+  let dtF = 0.016;
+  const cam = { cx: null, cy: null, k: null };
+
+  // HUD: se construye UNA vez; después solo cambia el texto (~12 Hz)
+  hud.innerHTML = "";
+  const hudN = new Map();
+  cars.forEach((c) => {
+    const nodo = el(`<span class="chip" style="--cc:${c.color}"><i></i><b>${c.code}</b>&nbsp;<span class="rh-v"></span>&nbsp;<span class="rh-g"></span>&nbsp;<span class="rh-m" style="color:var(--ink3);font-size:11px"></span></span>`);
+    hud.appendChild(nodo);
+    hudN.set(c.code, { v: nodo.querySelector(".rh-v"), g: nodo.querySelector(".rh-g"),
+                       m: nodo.querySelector(".rh-m") });
+  });
+  let hudLast = 0;
+  const updateHud = (estados, force) => {
+    const now = performance.now();
+    if (!force && now - hudLast < 80) return;
+    hudLast = now;
+    const pRef = prog(ref, estados[0].p.dist);
+    estados.forEach(({ c, p }) => {
+      const n = hudN.get(c.code);
+      n.v.textContent = p.fin ? c.lap_label : `${p.v.toFixed(0)} km/h`;
+      if (c === ref) { n.g.textContent = "REF"; n.g.style.color = "var(--ink3)"; n.m.textContent = ""; return; }
+      const g = p.fin ? (c.lap_time - ref.lap_time) : gapVsRef(c, tau, p.dist);
+      n.g.textContent = `${g >= 0 ? "+" : ""}${g.toFixed(p.fin ? 3 : 2)}s`;
+      n.g.style.color = g > 0 ? "#ff8181" : "#7dffb0";
+      const dm = (prog(c, p.dist) - pRef) * refD;
+      n.m.textContent = p.fin ? "" : `${dm >= 0 ? "+" : ""}${dm.toFixed(0)} m`;
+    });
+    lblT.textContent = `${tau.toFixed(1)} / ${Tmax.toFixed(1)}s`;
+    if (!arrastrando) scrub.value = Math.round((tau / Tmax) * 1000);
+  };
 
   // ── tira de telemetría sincronizada (velocidad / gas / freno / marcha) ──
   const tele = card.querySelector("#rpTele");
@@ -2063,8 +2138,8 @@ function drawReplay(zone, d) {
   const BANDS = [
     { key: "speed", lbl: "VEL",   min: 0,  max: vMax, frac: 0.42 },
     { key: "throttle", lbl: "GAS", min: 0, max: 105,  frac: 0.20 },
-    { key: "brake", lbl: "FRENO", min: 0,  max: 105,  frac: 0.20 },
-    { key: "gear", lbl: "MARCHA", min: 0.5, max: 8.5, frac: 0.18 },
+    { key: "brake", lbl: "FRENO", min: 0,  max: 105,  frac: 0.14 },
+    { key: "gear", lbl: "MARCHA", min: 0.5, max: 8.5, frac: 0.24 },
   ];
   const TH = 330, PADL = 56;
   let TW = 800, teleStatic = null, bandGeo = [];
@@ -2091,6 +2166,25 @@ function drawReplay(zone, d) {
       c.font = "700 9px Inter, sans-serif";
       c.fillStyle = "#767c88"; c.textAlign = "left";
       c.fillText(g.lbl, 8, (g.y0 + g.y1) / 2 + 3);
+      if (g.key === "brake") {
+        // el freno es BINARIO: bloques on/off por carril, no una línea de 0-100
+        const laneH = (g.y1 - g.y0) / cars.length;
+        cars.forEach((car, j) => {
+          c.fillStyle = car.color; c.globalAlpha = 0.55;
+          let d0 = null;
+          for (let i = 0; i <= car.d.length; i++) {
+            const on = i < car.d.length &&
+              (typeof car.brake[i] === "boolean" ? car.brake[i] : car.brake[i] >= 5);
+            if (on && d0 == null) d0 = car.d[i];
+            else if (!on && d0 != null) {
+              c.fillRect(px(d0), g.y0 + j * laneH + 1, Math.max(1.5, px(car.d[i - 1]) - px(d0)), laneH - 2);
+              d0 = null;
+            }
+          }
+          c.globalAlpha = 1;
+        });
+        return;
+      }
       cars.forEach((car) => {
         c.strokeStyle = car.color; c.globalAlpha = 0.85; c.lineWidth = 1.4;
         c.beginPath();
@@ -2121,74 +2215,92 @@ function drawReplay(zone, d) {
     const xRef = px(estados[0].p.dist);
     tctx.strokeStyle = "rgba(255,255,255,.45)"; tctx.lineWidth = 1;
     tctx.beginPath(); tctx.moveTo(xRef, 4); tctx.lineTo(xRef, TH - 6); tctx.stroke();
-    estados.forEach(({ c, p }) => {
+    estados.forEach(({ c, p }, j) => {
       const i = idxAt(c, p.dist), X = px(p.dist);
       bandGeo.forEach((g) => {
+        // marcha y freno son discretos: se usa la muestra vigente, sin interpolar
+        const Y = g.key === "brake"
+          ? g.y0 + (j + 0.5) * ((g.y1 - g.y0) / cars.length)
+          : py(g, c[g.key][i]);
         tctx.fillStyle = c.color;
         tctx.beginPath();
-        tctx.arc(X, py(g, c[g.key][i]), 3.6, 0, 7);
+        tctx.arc(X, Y, 3.6, 0, 7);
         tctx.fill();
         tctx.strokeStyle = "#0b0d12"; tctx.lineWidth = 1.4; tctx.stroke();
       });
     });
   };
 
-  const frame = () => {
+  const frame = (force) => {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
     ctx.drawImage(staticLayer, 0, 0, W, H);
     const estados = cars.map((c) => ({ c, p: at(c, tau) }));
+    // estelas por TIEMPO DE SIMULACIÓN: siempre los últimos 1.2 s de vuelta,
+    // sin importar FPS ni la velocidad de reproducción
     estados.forEach(({ c, p }) => {
       const tr = trails.get(c.code);
-      tr.push([p.x, p.y]);
-      if (tr.length > 46) tr.shift();
+      if (!tr.length || tr[tr.length - 1].tau !== tau) tr.push({ tau, x: p.x, y: p.y });
+      while (tr.length && tau - tr[0].tau > 1.2) tr.shift();
       for (let i = 0; i < tr.length; i++) {
-        ctx.globalAlpha = (i / tr.length) * 0.35;
+        ctx.globalAlpha = (1 - (tau - tr[i].tau) / 1.2) * 0.35;
         ctx.fillStyle = c.color;
         ctx.beginPath();
-        ctx.arc(sx(tr[i][0]), sy(tr[i][1]), 2.4, 0, 7);
+        ctx.arc(sx(tr[i].x), sy(tr[i].y), 2.4, 0, 7);
         ctx.fill();
       }
       ctx.globalAlpha = 1;
     });
     estados.forEach(({ c, p }) => {
       const X = sx(p.x), Y = sy(p.y);
-      ctx.shadowColor = c.color; ctx.shadowBlur = 14;
+      ctx.shadowColor = c.color; ctx.shadowBlur = 12;
       ctx.fillStyle = c.color;
-      ctx.beginPath(); ctx.arc(X, Y, 8, 0, 7); ctx.fill();
+      ctx.beginPath(); ctx.arc(X, Y, 6, 0, 7); ctx.fill();
       ctx.shadowBlur = 0;
+      if (c === ref) { ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5; ctx.stroke(); }
       ctx.font = "800 10px Inter, sans-serif"; ctx.textAlign = "center";
-      ctx.fillStyle = "#0b0d12";
-      ctx.fillText(c.code[0], X, Y + 3.5);
+      const wTxt = ctx.measureText(c.code).width;
+      ctx.fillStyle = "rgba(3,5,7,.75)";
+      ctx.fillRect(X - wTxt / 2 - 4, Y - 24, wTxt + 8, 13);
       ctx.fillStyle = c.color;
-      ctx.fillText(c.code, X, Y - 13);
+      ctx.fillText(c.code, X, Y - 14);
     });
-    // CLOSE-UP: cámara con zoom sobre los dos primeros fantasmas
+    // CLOSE-UP: cámara SUAVIZADA sobre los dos primeros fantasmas
     if (cars.length >= 2) {
       const pw = Math.min(360, W * 0.32), ph = Math.round(pw * 0.62);
       const px0 = W - pw - 14, py0 = 14;
       const a = estados[0].p, b = estados[1].p;
-      const cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
+      const cxT = (a.x + b.x) / 2, cyT = (a.y + b.y) / 2;
       const sep = Math.hypot(a.x - b.x, a.y - b.y);
-      const k2 = Math.min(4 * k, (pw * 0.6) / Math.max(sep, 30));
-      const S = (x, y) => [px0 + pw / 2 + (x - cx) * k2, py0 + ph / 2 - (y - cy) * k2];
+      const kT = Math.min(4 * k, (pw * 0.6) / Math.max(sep, 30));
+      const al = 1 - Math.exp(-dtF / 0.28);
+      cam.cx = cam.cx == null ? cxT : cam.cx + al * (cxT - cam.cx);
+      cam.cy = cam.cy == null ? cyT : cam.cy + al * (cyT - cam.cy);
+      cam.k = cam.k == null ? kT : cam.k + al * (kT - cam.k);
+      const k2 = cam.k;
+      const S = (x, y) => [px0 + pw / 2 + (x - cam.cx) * k2, py0 + ph / 2 - (y - cam.cy) * k2];
       ctx.save();
       ctx.beginPath(); ctx.roundRect(px0, py0, pw, ph, 10); ctx.clip();
       ctx.fillStyle = "rgba(10,12,17,.96)"; ctx.fillRect(px0, py0, pw, ph);
+      // solo el tramo LOCAL del circuito (no todo Silverstone por cuadro)
+      const iA = idxAt(ref, a.dist);
+      const iB = idxAt(ref, prog(estados[1].c, b.dist) * refD);
+      const lo2 = Math.max(0, Math.min(iA, iB) - 70);
+      const hi2 = Math.min(xs.length - 1, Math.max(iA, iB) + 70);
       ctx.strokeStyle = "rgba(255,255,255,.1)";
       ctx.lineWidth = Math.max(10, (k2 / k) * 5);
       ctx.lineJoin = ctx.lineCap = "round";
       ctx.beginPath();
-      for (let i = 0; i < xs.length; i++) {
+      for (let i = lo2; i <= hi2; i++) {
         const [X2, Y2] = S(xs[i], ys[i]);
-        (i ? ctx.lineTo(X2, Y2) : ctx.moveTo(X2, Y2));
+        (i > lo2 ? ctx.lineTo(X2, Y2) : ctx.moveTo(X2, Y2));
       }
       ctx.stroke();
       estados.slice(0, 2).forEach(({ c, p }) => {
         const [X2, Y2] = S(p.x, p.y);
         ctx.shadowColor = c.color; ctx.shadowBlur = 12;
         ctx.fillStyle = c.color;
-        ctx.beginPath(); ctx.arc(X2, Y2, 9, 0, 7); ctx.fill();
+        ctx.beginPath(); ctx.arc(X2, Y2, 8, 0, 7); ctx.fill();
         ctx.shadowBlur = 0;
         ctx.font = "800 10px Inter, sans-serif"; ctx.textAlign = "center";
         ctx.fillStyle = "#0b0d12"; ctx.fillText(c.code[0], X2, Y2 + 3.5);
@@ -2198,44 +2310,78 @@ function drawReplay(zone, d) {
       ctx.beginPath(); ctx.roundRect(px0, py0, pw, ph, 10); ctx.stroke();
       ctx.font = "700 9px Inter, sans-serif"; ctx.fillStyle = "#8a919e";
       ctx.textAlign = "left";
-      ctx.fillText("CLOSE-UP", px0 + 10, py0 + 16);
+      const dm2 = (prog(estados[1].c, b.dist) - prog(ref, a.dist)) * refD;
+      ctx.fillText(`CLOSE-UP · ${curvaCerca(a.dist)} · Δ ${dm2 >= 0 ? "+" : ""}${dm2.toFixed(0)} m`, px0 + 10, py0 + 16);
+      // escala: sin ella el zoom variable engaña al ojo
+      const esc = 20 * k2;
+      ctx.strokeStyle = "rgba(255,255,255,.5)"; ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(px0 + 10, py0 + ph - 10); ctx.lineTo(px0 + 10 + esc, py0 + ph - 10);
+      ctx.stroke();
+      ctx.fillText("20 m", px0 + 12 + esc, py0 + ph - 7);
     }
-    // HUD
-    hud.innerHTML = estados.map(({ c, p }) => {
-      const g = gapVsRef(c, tau, p.dist);
-      const gtxt = c === ref ? "REF" : (g >= 0 ? `+${g.toFixed(2)}s` : `${g.toFixed(2)}s`);
-      return `<span class="chip" style="--cc:${c.color}"><i></i><b>${c.code}</b>
-        &nbsp;${p.fin ? c.lap_label : p.v.toFixed(0) + " km/h"}
-        &nbsp;<span style="color:${c === ref ? "var(--ink3)" : g > 0 ? "#ff8181" : "#7dffb0"}">${p.fin ? "" : gtxt}</span></span>`;
-    }).join("");
-    lblT.textContent = `${tau.toFixed(1)}s`;
-    if (!arrastrando) scrub.value = Math.round((tau / Tmax) * 1000);
+    updateHud(estados, force);
     drawTele(estados);
   };
 
+  // ── ciclo de vida: limpiar rAF, observador y teclas al salir del replay ──
+  let ro = null;
+  const onVis = () => { last = null; };
+  const onKey = (e) => {
+    if (!canvas.isConnected) { destruye(); return; }
+    if (!canvas.offsetParent) return;              // pestaña REPLAY no visible
+    if (/INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
+    if (e.code === "Space") { e.preventDefault(); btn.click(); }
+    else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      e.preventDefault();
+      const paso = (e.shiftKey ? 5 : 0.5) * (e.key === "ArrowLeft" ? -1 : 1);
+      tau = Math.max(0, Math.min(Tmax, tau + paso));
+      trails.forEach((t) => { t.length = 0; });
+      frame(true);
+    }
+  };
+  const destruye = () => {
+    playing = false;
+    if (raf != null) cancelAnimationFrame(raf);
+    if (ro) ro.disconnect();
+    document.removeEventListener("keydown", onKey);
+    document.removeEventListener("visibilitychange", onVis);
+  };
+
   const loop = (ts) => {
+    if (!canvas.isConnected) { destruye(); return; }
     if (!playing) return;
-    if (last != null) tau = Math.min(Tmax, tau + ((ts - last) / 1000) * (+selV.value));
+    if (last != null) {
+      dtF = Math.min((ts - last) / 1000, 0.05);   // pestaña oculta: sin saltos
+      tau = Math.min(Tmax, tau + dtF * (+selV.value));
+    }
     last = ts;
-    frame();
-    if (tau >= Tmax) { playing = false; btn.textContent = "↻ REPETIR"; return; }
+    frame(false);
+    if (tau >= Tmax) { playing = false; btn.textContent = "↻ REPETIR"; frame(true); return; }
     raf = requestAnimationFrame(loop);
   };
   btn.onclick = () => {
     if (playing) { playing = false; btn.textContent = "▶ PLAY"; cancelAnimationFrame(raf); return; }
-    if (tau >= Tmax) { tau = 0; trails.forEach((t) => t.length = 0); }
+    if (tau >= Tmax) { tau = 0; trails.forEach((t) => { t.length = 0; }); }
     playing = true; last = null; btn.textContent = "❚❚ PAUSA";
     raf = requestAnimationFrame(loop);
   };
   scrub.oninput = (e) => {
     arrastrando = true;
     tau = (+e.target.value / 1000) * Tmax;
-    trails.forEach((t) => t.length = 0);
-    frame();
+    trails.forEach((t) => { t.length = 0; });
+    cam.cx = cam.cy = cam.k = null;
+    frame(true);
     arrastrando = false;
   };
-  new ResizeObserver(() => { fit(); buildStatic(); fitTele(); frame(); }).observe(canvas);
-  fit(); buildStatic(); fitTele(); frame();
+  document.addEventListener("keydown", onKey);
+  document.addEventListener("visibilitychange", onVis);
+  ro = new ResizeObserver(() => {
+    if (!canvas.isConnected) { destruye(); return; }
+    fit(); buildStatic(); fitTele(); frame(true);
+  });
+  ro.observe(canvas);
+  fit(); buildStatic(); fitTele(); frame(true);
 }
 
 /* ───────────────────────────── RITMO DE SESIÓN (estadística de toda la sesión) */
