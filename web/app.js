@@ -23,7 +23,8 @@ const fmtLap = (s) => {
 };
 
 const PLOTLY_CFG = {
-  displayModeBar: true, displaylogo: false, responsive: true,
+  // modebar solo al pasar el cursor: menos ruido visual permanente
+  displayModeBar: "hover", displaylogo: false, responsive: true,
   modeBarButtonsToRemove: ["lasso2d", "select2d", "autoScale2d", "toggleSpikelines",
                            "hoverClosestCartesian", "hoverCompareCartesian"],
   doubleClick: "reset",
@@ -2082,7 +2083,7 @@ function cardMuroPits({ rows, summary, sub }) {
         <small>${nP} parada${nP === 1 ? "" : "s"}${tot}</small></div>
       <div class="pit-strip">${strip}</div></div>`;
   }).join("");
-  return el(`<div class="card chart-card" style="margin-bottom:20px">
+  return el(`<div class="card chart-card keep-card" style="margin-bottom:20px">
     <div class="chart-head"><h2>Pits y estrategia</h2>
       <span class="sub">${sub || "ancho del bloque = vueltas del stint · V## = vuelta de parada · +s = tiempo perdido vs sus vueltas limpias"}</span></div>
     <div style="padding:10px 18px 4px">${filas}</div>

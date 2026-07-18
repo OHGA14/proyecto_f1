@@ -634,3 +634,42 @@ html[data-theme="spacex"] .btn-red { border-radius: 3px; }
   box-shadow: 0 0 8px rgba(46, 204, 113, .8);
   animation: pulse 1.6s ease-in-out infinite;
 }
+
+/* ═══════════════ FASE D · PUREZA SPACEX: paneles, no cajas ═══════════════
+   Las gráficas viven sobre el fondo, separadas por una línea superior.
+   Solo lo interactivo o independiente conserva caja: tiles, chips, misión,
+   predicción, muro de pits (.keep-card) y tarjetas de GP.                  */
+html[data-theme="spacex"] .chart-card:not(.keep-card),
+html[data-theme="spacex"] .card.table-wrap {
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+}
+
+/* píldoras planas: texto con subrayado, no cajitas */
+html[data-theme="spacex"] .pill {
+  background: transparent; border-color: transparent;
+  border-radius: 0; padding: 6px 10px;
+  border-bottom: 2px solid transparent;
+  letter-spacing: 1.2px;
+}
+html[data-theme="spacex"] .pill:hover {
+  border-color: transparent; border-bottom-color: rgba(255, 255, 255, .28);
+}
+html[data-theme="spacex"] .pill.active {
+  background: transparent; border-color: transparent;
+  border-bottom-color: rgba(var(--red-rgb), .9); color: #fff;
+}
+
+/* la acción principal es plana: el dramatismo se reserva para el cohete */
+html[data-theme="spacex"] .btn-red {
+  background: var(--red); color: #04121d;
+  box-shadow: none; animation: none;
+}
+html[data-theme="spacex"] .btn-red:hover {
+  transform: none; box-shadow: none; filter: brightness(1.12);
+}
+
+/* respiración entre secciones principales */
+html[data-theme="spacex"] .section-title { margin: 34px 0 14px; }
