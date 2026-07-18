@@ -732,19 +732,35 @@ def session_stats(sid):
                 positions.append({"code": code, "color": colores.get(code),
                                   "laps": g["LapNumber"].astype(int).tolist(),
                                   "pos": g["Position"].astype(int).tolist()})
-        piv = df[df["t"].notna()].pivot_table(index="LapNumber", columns="Driver",
-                                              values="t", aggfunc="first")
+        # gap por MARCA de fin de vuelta (Time), no por cumsum de LapTime:
+        # cumsum SALTA las vueltas sin tiempo (SC/bandera) y desplazaba el gap
+        # de todo el campo en ~la duración de esa vuelta (el salto a +175s).
+        piv = None
+        if "Time" in df.columns:
+            fin_s = df["Time"].dt.total_seconds()
+            if fin_s.notna().any():
+                piv = (df.assign(fin_s=fin_s)[fin_s.notna()]
+                       .pivot_table(index="LapNumber", columns="Driver",
+                                    values="fin_s", aggfunc="first"))
+        if piv is None or not len(piv):
+            piv = df[df["t"].notna()].pivot_table(index="LapNumber", columns="Driver",
+                                                  values="t", aggfunc="first").cumsum()
         if len(piv):
-            cum = piv.cumsum()
-            lider = cum.min(axis=1)
-            gapdf = cum.sub(lider, axis=0)
+            lider = piv.min(axis=1)
+            gapdf = piv.sub(lider, axis=0)
             for code in orden:
                 if code not in gapdf.columns:
                     continue
-                serie = gapdf[code].dropna()
+                serie = gapdf[code]
+                # None donde falta la marca → el frontend CORTA la línea
+                vals = [round(float(v), 2) if v == v else None for v in serie.values]
+                laps_l = serie.index.astype(int).tolist()
+                while vals and vals[-1] is None:
+                    vals.pop(); laps_l.pop()
+                if not vals:
+                    continue
                 gaps.append({"code": code, "color": colores.get(code),
-                             "laps": serie.index.astype(int).tolist(),
-                             "gap": serie.round(2).tolist()})
+                             "laps": laps_l, "gap": vals})
 
     summaries = {}
     if cv:

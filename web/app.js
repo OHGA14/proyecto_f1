@@ -2595,7 +2595,7 @@ function drawSessionStatsInner(Z, ss, rerender) {
       summary: sumRitmo,
       tips: ["<b>¿La línea baja poco a poco?</b> → el coche mejora al quemar combustible; si sube, la goma degrada más de lo que el combustible regala.",
              "<b>¿Escalón hacia abajo tras una ✕?</b> → paró y volvió con goma nueva.",
-             "Las vueltas atípicas (pits, SC, errores) arrancan OCULTAS porque estiran la escala y aplastan las diferencias reales; el botón de arriba las trae de vuelta.",
+             "Las vueltas excluidas arrancan OCULTAS (estiran la escala); el botón dice cuántas son SC/VSC, pit y atípicas. Los ◆ PIT se marcan SIEMPRE abajo: son eventos de carrera, no errores.",
              "Toca un piloto en la leyenda para aislarlo."],
       legendHtml: `<div class="compound-legend">${Object.entries(COMP_COLORS).map(([k, v]) =>
         `<span class="chip" style="--cc:${v}"><i></i>${k}</span>`).join("")}
@@ -2612,26 +2612,49 @@ function drawSessionStatsInner(Z, ss, rerender) {
     const traces = [];
     const outX = [], outY = [];
     const pitX = [], pitY = [], pitC = [];
+    const enSC = (lap) => (ss.sc_ranges || []).some(([a, b]) => lap >= a && lap <= b);
+    let nSC = 0, nPit = 0, nAtip = 0;
     ss.evo.forEach((e) => {
-      const limpio = e.points.filter((p) => !p.out);
-      traces.push({ type: "scatter", mode: "lines+markers", name: e.code,
-        x: limpio.map((p) => p.lap), y: limpio.map((p) => p.t),
-        line: { color: e.color, width: 1.7 },
-        marker: { size: 6, color: limpio.map((p) => COMP_COLORS[p.comp] || e.color),
-                  line: { color: "#11141b", width: 1 } },
-        customdata: limpio.map((p) => [fmtLap(p.t), p.comp]),
-        hovertemplate: `<b>${e.code}</b> · V%{x}<br>%{customdata[0]} · %{customdata[1]}<extra></extra>` });
-      e.points.filter((p) => p.out).forEach((p) => { outX.push(p.lap); outY.push(p.t); });
+      // una traza POR STINT: cambiar de compuesto o parar NO es una evolución
+      // continua; y dentro del stint, las vueltas faltantes cortan la línea
+      const stintsDe = (ss.stints || []).filter((s) => s.code === e.code)
+        .sort((a, b) => a.from - b.from);
+      const tramos = stintsDe.length ? stintsDe : [{ from: -1e9, to: 1e9 }];
+      let primera = true;
+      tramos.forEach((st) => {
+        const limpio = e.points.filter((p) => !p.out && p.lap >= st.from && p.lap <= st.to);
+        if (!limpio.length) return;
+        const xsL = [], ysL = [], cdL = [];
+        limpio.forEach((p, i) => {
+          if (i && p.lap - limpio[i - 1].lap > 1) { xsL.push(null); ysL.push(null); cdL.push(["", ""]); }
+          xsL.push(p.lap); ysL.push(p.t); cdL.push([fmtLap(p.t), p.comp]);
+        });
+        traces.push({ type: "scatter", mode: "lines+markers", name: e.code,
+          legendgroup: e.code, showlegend: primera, connectgaps: false,
+          x: xsL, y: ysL,
+          line: { color: e.color, width: 1.7 },
+          marker: { size: 6, color: cdL.map((cd) => COMP_COLORS[cd[1]] || e.color),
+                    line: { color: "#11141b", width: 1 } },
+          customdata: cdL,
+          hovertemplate: `<b>${e.code}</b> · V%{x}<br>%{customdata[0]} · %{customdata[1]}<extra></extra>` });
+        primera = false;
+      });
+      e.points.filter((p) => p.out).forEach((p) => {
+        outX.push(p.lap); outY.push(p.t);
+        if (p.pit) nPit++; else if (enSC(p.lap)) nSC++; else nAtip++;
+      });
       e.points.filter((p) => p.pit).forEach((p) => { pitX.push(p.lap); pitY.push(p.t); pitC.push(e.color); });
     });
     const mostrar = state.evoOut === true;   // ocultas por defecto
-    const nOcultas = outX.length + pitX.length;
-    if (!mostrar && nOcultas)
-      cEvo.card.querySelector("#evoTgl").textContent = `${nOcultas} ATÍPICAS OCULTAS · MOSTRAR`;
+    if (!mostrar && outX.length)
+      cEvo.card.querySelector("#evoTgl").textContent =
+        `${outX.length} OCULTAS · ${nSC} SC/VSC · ${nPit} PIT · ${nAtip} ATÍPICAS · MOSTRAR`;
     if (mostrar && outX.length)
-      traces.push({ type: "scatter", mode: "markers", name: "Atípicas",
+      traces.push({ type: "scatter", mode: "markers", name: "Excluidas",
         x: outX, y: outY, marker: { symbol: "x-thin-open", size: 6, color: "#5b616d" },
         hoverinfo: "skip" });
+    // los PIT son eventos estructurales: siempre visibles (con atípicas
+    // ocultas se marcan abajo, porque su tiempo real queda fuera de escala)
     if (mostrar && pitX.length)
       traces.push({ type: "scatter", mode: "markers", name: "Pit",
         x: pitX, y: pitY, marker: { symbol: "diamond", size: 7, color: pitC,
@@ -2645,14 +2668,20 @@ function drawSessionStatsInner(Z, ss, rerender) {
     const tt = timeTicks(ys.length ? ys : [60, 120]);
     const pad = (Math.max(...ys) - Math.min(...ys)) * 0.05 + 0.15;
     const rangoY = [Math.min(...ys) - pad, Math.max(...ys) + pad];
+    const maxLapEvo = Math.max(...ss.evo.flatMap((e) => e.points.map((p) => p.lap)));
     const scShapesEvo = (ss.sc_ranges || []).map(([l0, l1]) => ({
-      type: "rect", x0: l0 - 0.5, x1: l1 + 0.5, yref: "paper", y0: 0, y1: 1,
+      type: "rect", x0: Math.max(1, l0) - 0.5, x1: Math.min(l1, maxLapEvo) + 0.5,
+      yref: "paper", y0: 0, y1: 1,
       fillcolor: "rgba(255,196,0,.07)", line: { width: 0 }, layer: "below" }));
+    const pitAnnots = !mostrar ? pitX.map((l, i) => ({
+      x: l, yref: "paper", y: 0.015, text: "◆", showarrow: false,
+      font: { size: 10, color: pitC[i] } })) : [];
     Plotly.newPlot(cEvo.plot, traces, baseLayout({
       height: 560, hovermode: "closest", shapes: scShapesEvo,
-      annotations: (ss.sc_ranges || []).map(([l0, l1]) => ({
-        x: (l0 + l1) / 2, yref: "paper", y: 1.03, text: "SC/VSC", showarrow: false,
-        font: { size: 9, color: "#FFC400" } })),
+      annotations: [...(ss.sc_ranges || []).map(([l0, l1]) => ({
+        x: (Math.max(1, l0) + Math.min(l1, maxLapEvo)) / 2, yref: "paper", y: 1.03,
+        text: "SC/VSC", showarrow: false,
+        font: { size: 9, color: "#FFC400" } })), ...pitAnnots],
       margin: { l: 64, r: 14, t: 30, b: 44 },
       xaxis: { ...baseLayout().xaxis, title: { text: "VUELTA", font: { size: 10 } } },
       yaxis: { ...baseLayout().yaxis, ...tt, range: rangoY },
@@ -2660,52 +2689,149 @@ function drawSessionStatsInner(Z, ss, rerender) {
     }), PLOTLY_CFG);
   }
 
-  // LAP CHART + GAP AL LÍDER (carrera)
+  // ── POSICIÓN + GAP AL LÍDER: un panel sincronizado (misma historia)
   if (ss.positions && ss.positions.length) {
+    const maxLapP = Math.max(...ss.positions.flatMap((x) => x.laps));
     const scShapesLap = (ss.sc_ranges || []).map(([l0, l1]) => ({
-      type: "rect", x0: l0 - 0.5, x1: l1 + 0.5, yref: "paper", y0: 0, y1: 1,
+      type: "rect", x0: Math.max(1, l0) - 0.5, x1: Math.min(l1, maxLapP) + 0.5,
+      yref: "paper", y0: 0, y1: 1,
       fillcolor: "rgba(255,196,0,.07)", line: { width: 0 }, layer: "below" }));
-    const cLp = chartCard({
-      title: "Lap chart · posición vuelta a vuelta", sub: "bandas amarillas = SC/VSC",
-      tips: ["<b>¿Cae varias posiciones de golpe?</b> → pit stop; mira si las recupera.",
-             "<b>¿Cruces constantes?</b> → batalla real en pista."],
+
+    // resumen de historia de carrera, calculado
+    let sumLap = "";
+    {
+      const lideres = {};
+      ss.positions.forEach((x) => x.pos.forEach((p) => {
+        if (p === 1) lideres[x.code] = (lideres[x.code] || 0) + 1;
+      }));
+      const led = Object.entries(lideres).sort((a, b) => b[1] - a[1])[0];
+      const partes = [];
+      if (led) partes.push(`${led[0]} lideró ${led[1]} de ${maxLapP} vueltas.`);
+      ss.positions.forEach((x) => {
+        const peor = Math.max(...x.pos), fin2 = x.pos[x.pos.length - 1];
+        if (peor - fin2 >= 3)
+          partes.push(`${x.code} cayó hasta P${peor} y recuperó hasta P${fin2}.`);
+      });
+      sumLap = partes.join(" ");
+    }
+
+    const cPG = chartCard({
+      title: "Posición y gap al líder",
+      sub: "posición OFICIAL al cierre de cada vuelta (escalones) · abajo: segundos tras el líder · zoom y cursor compartidos",
+      summary: sumLap,
+      tips: ["La posición es un ESCALÓN por vuelta: P3→P7 no 'pasa por' P4-P6, cambia al cierre de la vuelta. Y P1−P2 no mide rendimiento (pueden separarlos 0.2s o 20s): por eso el gap va debajo, sincronizado.",
+             "<b>¿Caída de posiciones + escalón de ~20s en el gap?</b> → pit stop (los ◆ lo marcan). <b>¿Todas las líneas del gap se comprimen?</b> → SC: el pelotón se reagrupa.",
+             "Los huecos en el gap son vueltas sin marca de tiempo fiable: se CORTAN, no se inventan.",
+             "El gap abre en vista CABEZA (0-60s) para no dejar que un doblado aplaste la resolución; usa TODO para el panorama completo.",
+             "Con 2 pilotos seleccionados, ENTRE SELECCIONADOS resta sus gaps y muestra su duelo directo."],
     });
-    Z.ritmo.appendChild(cLp.card);
+    Z.ritmo.appendChild(cPG.card);
     Z.ritmo.appendChild(el(`<div style="height:20px"></div>`));
-    Plotly.newPlot(cLp.plot, ss.positions.map((x) => ({
-      type: "scatter", mode: "lines", name: x.code, x: x.laps, y: x.pos,
-      line: { color: x.color, width: 2 },
-      hovertemplate: `<b>${x.code}</b> · V%{x} · P%{y}<extra></extra>`,
-    })), baseLayout({
-      height: 560, shapes: scShapesLap,
-      margin: { l: 46, r: 14, t: 14, b: 44 },
-      xaxis: { ...baseLayout().xaxis, title: { text: "VUELTA", font: { size: 10 } } },
+    const pPos = cPG.plot;
+    const pGap = el(`<div></div>`);
+    cPG.card.querySelector(".chart-body").appendChild(pGap);
+
+    // pits ◆ sobre la línea de posición
+    const pitMarks = [];
+    (ss.pits || []).forEach((pp) => {
+      const serie = ss.positions.find((x) => x.code === pp.code);
+      if (!serie) return;
+      (pp.stops || []).forEach((st) => {
+        const i = serie.laps.indexOf(st.lap);
+        if (i >= 0) pitMarks.push({ lap: st.lap, pos: serie.pos[i], color: serie.color });
+      });
+    });
+    const finLbls = ss.positions.map((x) => ({
+      x: x.laps[x.laps.length - 1], y: x.pos[x.pos.length - 1],
+      text: `${x.code} · P${x.pos[x.pos.length - 1]}`, showarrow: false,
+      xanchor: "left", xshift: 6, font: { size: 10, color: x.color } }));
+    Plotly.newPlot(pPos, [
+      ...ss.positions.map((x) => ({
+        type: "scatter", mode: "lines", name: x.code, legendgroup: x.code,
+        x: x.laps, y: x.pos,
+        line: { color: x.color, width: 2, shape: "hv" },
+        hovertemplate: `<b>${x.code}</b> · V%{x} · P%{y}<extra></extra>`,
+      })),
+      { type: "scatter", mode: "markers", showlegend: false,
+        x: pitMarks.map((m) => m.lap), y: pitMarks.map((m) => m.pos),
+        marker: { symbol: "diamond", size: 7, color: pitMarks.map((m) => m.color),
+                  line: { color: "#fff", width: 1 } },
+        hovertemplate: "PIT · V%{x}<extra></extra>" },
+    ], baseLayout({
+      height: chartHeight({ items: ss.positions.length, min: 240, max: 320, per: 18 }),
+      shapes: scShapesLap,
+      margin: { l: 46, r: 66, t: 20, b: 6 },
+      annotations: finLbls,
+      xaxis: { ...baseLayout().xaxis, showticklabels: false },
       yaxis: { ...baseLayout().yaxis, title: { text: "POSICIÓN", font: { size: 10 } },
                autorange: "reversed", dtick: 1 },
-      legend: { orientation: "h", y: -0.1, font: { size: 10.5 } },
+      legend: { orientation: "h", y: 1.22, x: 1, xanchor: "right", font: { size: 10 } },
     }), PLOTLY_CFG);
 
     if (ss.gaps && ss.gaps.length) {
-      const cGp = chartCard({
-        title: "Gap al líder", sub: "segundos detrás del primero",
-        tips: ["<b>¿Se comprimen todas las líneas?</b> → coche de seguridad: el pelotón se reagrupa.",
-               "<b>¿Escalón de ~20s hacia arriba?</b> → pit stop."],
+      const dosSel = ss.gaps.length === 2;
+      const ctlG = el(`<div class="pills" style="padding:0 18px 12px">
+        <button class="pill active" data-r="60">CABEZA · 0-60s</button>
+        <button class="pill" data-r="0">TODO</button>
+        <button class="pill" data-r="180">0-180s</button>
+        ${dosSel ? `<span style="width:14px"></span>
+        <button class="pill active" data-gm="lider">AL LÍDER</button>
+        <button class="pill" data-gm="sel">ENTRE SELECCIONADOS</button>` : ""}</div>`);
+      cPG.card.insertBefore(ctlG, cPG.card.querySelector(".chart-summary") || cPG.card.querySelector(".chart-guide"));
+
+      const dibujaGap = () => {
+        const modo = dosSel && state.gapModo === "sel" ? "sel" : "lider";
+        ctlG.querySelectorAll("[data-gm]").forEach((b) =>
+          b.classList.toggle("active", b.dataset.gm === modo));
+        ctlG.querySelectorAll("[data-r]").forEach((b) =>
+          b.style.display = modo === "sel" ? "none" : "");
+        let trazasG;
+        if (modo === "sel") {
+          const [A, B] = ss.gaps;
+          const porLap = new Map(B.laps.map((l, i) => [l, B.gap[i]]));
+          const xsG = [], ysG = [];
+          A.laps.forEach((l, i) => {
+            const gb = porLap.get(l);
+            xsG.push(l);
+            ysG.push(A.gap[i] != null && gb != null ? +(A.gap[i] - gb).toFixed(2) : null);
+          });
+          trazasG = [{ type: "scatter", mode: "lines", name: `${A.code} − ${B.code}`,
+            x: xsG, y: ysG, connectgaps: false,
+            line: { color: A.color, width: 2 },
+            hovertemplate: `V%{x} · ${A.code} %{y:+.1f}s vs ${B.code}<extra></extra>` }];
+        } else {
+          trazasG = ss.gaps.map((x) => ({
+            type: "scatter", mode: "lines", name: x.code, legendgroup: x.code,
+            showlegend: false, x: x.laps, y: x.gap, connectgaps: false,
+            line: { color: x.color, width: 2 },
+            hovertemplate: `<b>${x.code}</b> · V%{x}<br>+%{y:.1f}s<extra></extra>` }));
+        }
+        Plotly.react(pGap, trazasG, baseLayout({
+          height: 380, shapes: scShapesLap,
+          margin: { l: 46, r: 66, t: 8, b: 44 },
+          xaxis: { ...baseLayout().xaxis, title: { text: "VUELTA", font: { size: 10 } } },
+          yaxis: { ...baseLayout().yaxis,
+                   title: { text: modo === "sel" ? "DIFERENCIA (S)" : "SEGUNDOS TRAS EL LÍDER", font: { size: 10 } },
+                   ...(modo === "sel"
+                       ? { autorange: true, zeroline: true, zerolinecolor: "rgba(255,255,255,.3)" }
+                       : { range: [60, -2], autorange: false }) },
+          showlegend: false,
+        }), PLOTLY_CFG);
+      };
+      ctlG.querySelectorAll("[data-r]").forEach((b) => {
+        b.onclick = () => {
+          ctlG.querySelectorAll("[data-r]").forEach((p) => p.classList.remove("active"));
+          b.classList.add("active");
+          const r = +b.dataset.r;
+          Plotly.relayout(pGap, r ? { "yaxis.range": [r, -2], "yaxis.autorange": false }
+                                  : { "yaxis.autorange": "reversed" });
+        };
       });
-      Z.ritmo.appendChild(cGp.card);
-      Z.ritmo.appendChild(el(`<div style="height:20px"></div>`));
-      Plotly.newPlot(cGp.plot, ss.gaps.map((x) => ({
-        type: "scatter", mode: "lines", name: x.code, x: x.laps, y: x.gap,
-        line: { color: x.color, width: 2 },
-        hovertemplate: `<b>${x.code}</b> · V%{x}<br>+%{y:.1f}s<extra></extra>`,
-      })), baseLayout({
-        height: 660, shapes: scShapesLap,
-        margin: { l: 52, r: 14, t: 14, b: 44 },
-        xaxis: { ...baseLayout().xaxis, title: { text: "VUELTA", font: { size: 10 } } },
-        yaxis: { ...baseLayout().yaxis, title: { text: "SEGUNDOS TRAS EL LÍDER", font: { size: 10 } },
-                 autorange: "reversed" },
-        legend: { orientation: "h", y: -0.1, font: { size: 10.5 } },
-      }), PLOTLY_CFG);
-      zoomGapPills(cGp.card, cGp.plot);
+      ctlG.querySelectorAll("[data-gm]").forEach((b) => {
+        b.onclick = () => { state.gapModo = b.dataset.gm; dibujaGap(); };
+      });
+      dibujaGap();
+      sincronizaX([pPos, pGap]);
     }
   }
 
@@ -2988,41 +3114,57 @@ function drawSessionStatsInner(Z, ss, rerender) {
 
       // gráfica 2: ritmo comparable a edad común (SIN conectar compuestos)
       if (conT5.length) {
-        let sumCmp = "";
-        if (top && mejor5) {
-          const rivalMismo = conT5.find((s) => s.code !== mejor5.code && s.compound === mejor5.compound);
-          sumCmp = `Mayor pendiente concluyente: ${top.code} en S${top.nS} (${top.compound}, +${(top.fit.beta * 1000).toFixed(0)} ms/v, confianza ${top.conf}).` +
-            (rivalMismo ? ` A igual edad de goma, ${mejor5.code} mantiene ${(rivalMismo.t5 - mejor5.t5).toFixed(2)}s sobre ${rivalMismo.code} en ${mejor5.compound}.` : "") +
-            ` La mejora de mediana entre stints se explica en parte por el combustible: no contradice la degradación interna.`;
-        } else if (!top) {
-          sumCmp = "Ninguna pendiente de degradación es estadísticamente concluyente en esta selección (IC cruzando el cero o pocas vueltas limpias).";
+        // comparación pareada HONESTA: diferencia con su propio IC, y solo
+        // entre stints del mismo compuesto; el veredicto se declara
+        let sumCmp = top
+          ? `Mayor pendiente concluyente: ${top.code} S${top.nS} (${top.compound}, +${(top.fit.beta * 1000).toFixed(0)} ms/v, confianza ${top.conf}). `
+          : "Ninguna pendiente de degradación es concluyente en esta selección (IC cruzando el cero o pocas vueltas limpias). ";
+        const pares = [];
+        conT5.forEach((a) => conT5.forEach((b) => {
+          if (a.code < b.code && a.compound === b.compound) pares.push([a, b]);
+        }));
+        if (pares.length) {
+          const [pa, pb] = pares.sort((p1, p2) =>
+            Math.abs(p2[0].t5 - p2[1].t5) - Math.abs(p1[0].t5 - p1[1].t5))[0];
+          const rap2 = pa.t5 <= pb.t5 ? pa : pb, len2 = pa.t5 <= pb.t5 ? pb : pa;
+          const D = len2.t5 - rap2.t5;
+          const seD = Math.sqrt((rap2.fit.sePred5 || 0) ** 2 + (len2.fit.sePred5 || 0) ** 2);
+          sumCmp += `El modelo estima que ${rap2.code} S${rap2.nS} ${rap2.compound} fue ` +
+            `${D.toFixed(2)}s más rápido que ${len2.code} S${len2.nS} a igual vuelta de stint y ` +
+            `combustible equivalente (IC de la diferencia ±${(2 * seD).toFixed(2)}s → ` +
+            `${D > 2 * seD ? "diferencia CONCLUYENTE" : "diferencia INCONCLUSA"}). ` +
+            `La comparación no controla evolución de pista ni tráfico.`;
         }
         const cCmp = chartCard({
-          title: "Ritmo típico por stint · comparable a edad 5",
-          sub: "punto = tiempo estimado con 5 vueltas de goma y masa constante · barra = incertidumbre · sin conectar compuestos distintos",
+          title: "Ritmo típico por stint · comparable a la vuelta 5",
+          sub: "punto = ritmo estimado en la VUELTA 5 del stint · corrección ESTIMADA de combustible (35 ms/v) · barra = IC 95% del ritmo medio · agrupado por compuesto",
           summary: sumCmp,
-          tips: ["Cada stint se evalúa a la MISMA edad de neumático (5 vueltas): comparar medianas de stints de distinta longitud mezcla ritmo con duración.",
-                 "<b>¿Barras que se traslapan?</b> → diferencia no concluyente.",
-                 "Stints sin 5 vueltas limpias quedan fuera de esta comparación.",
-                 "Diferencias entre stints del mismo compuesto pueden venir de goma, tráfico, pista o gestión — compara a igual edad antes de atribuir la causa."],
+          tips: ["Cada stint se evalúa a la MISMA vuelta de stint (la 5ª): comparar medianas de stints de distinta duración mezcla ritmo con longitud. Ojo: es vuelta DEL STINT, no edad física total — una goma usada previamente empieza más vieja.",
+                 "La barra es el IC 95% del ritmo MEDIO estimado (no el rango de una vuelta individual, que sería más ancho). <b>¿Barras que se traslapan?</b> → no declares ganador.",
+                 "La corrección de combustible es una ESTIMACIÓN (35 ms/v constantes): bajo SC o gestión la relación real cambia.",
+                 "Stints sin 5 vueltas limpias quedan fuera. Diferencias entre stints del mismo compuesto también cargan pista, tráfico y momento de carrera."],
         });
         Z.estrategia.appendChild(cCmp.card);
         Z.estrategia.appendChild(el(`<div style="height:20px"></div>`));
-        const etiquetas = conT5.map((s) => `${s.code} · S${s.nS} ${s.compound}`);
-        const ttC = timeTicks(conT5.map((s) => s.t5));
+        const ordC = [...conT5].sort((a, b) =>
+          (a.compound < b.compound ? -1 : a.compound > b.compound ? 1 : a.t5 - b.t5));
+        const etiquetas = ordC.map((s) => `${s.code} · S${s.nS} ${s.compound}`);
+        const ttC = timeTicks(ordC.map((s) => s.t5));
         Plotly.newPlot(cCmp.plot, [{
-          type: "scatter", mode: "markers",
-          y: etiquetas, x: conT5.map((s) => s.t5),
-          error_x: { type: "data", array: conT5.map((s) => 2 * (s.fit.sePred5 || 0)),
+          type: "scatter", mode: "markers+text",
+          y: etiquetas, x: ordC.map((s) => s.t5),
+          error_x: { type: "data", array: ordC.map((s) => 2 * (s.fit.sePred5 || 0)),
                      color: "rgba(148,163,184,.45)", thickness: 1.4, width: 5 },
-          marker: { size: 11, color: conT5.map((s) => COMP_COLORS[s.compound] || "#9aa0aa"),
-                    line: { color: conT5.map((s) => s.color), width: 2 } },
-          customdata: conT5.map((s) => [fmtLap(s.t5), s.fit.n, s.conf]),
-          hovertemplate: "<b>%{y}</b><br>%{customdata[0]} a edad 5 · %{customdata[1]} vueltas limpias · confianza %{customdata[2]}<extra></extra>",
+          marker: { size: 11, color: ordC.map((s) => COMP_COLORS[s.compound] || "#9aa0aa"),
+                    line: { color: ordC.map((s) => s.color), width: 2 } },
+          text: ordC.map((s) => `  ${fmtLap(s.t5)} · n=${s.fit.n}`),
+          textposition: "middle right", textfont: { size: 9.5, color: "#8a94a4" },
+          customdata: ordC.map((s) => [fmtLap(s.t5), s.fit.n, s.conf]),
+          hovertemplate: "<b>%{y}</b><br>%{customdata[0]} en la vuelta 5 · %{customdata[1]} vueltas limpias · confianza %{customdata[2]}<extra></extra>",
           showlegend: false,
         }], baseLayout({
-          height: chartHeight({ items: conT5.length, min: 260, max: 520, per: 42 }),
-          margin: { l: 150, r: 24, t: 10, b: 44 },
+          height: chartHeight({ items: ordC.length, min: 260, max: 520, per: 42 }),
+          margin: { l: 150, r: 100, t: 10, b: 44 },
           xaxis: { ...baseLayout().xaxis, ...ttC, tickfont: { size: 10.5 } },
           yaxis: { ...baseLayout().yaxis, autorange: "reversed", gridcolor: "rgba(255,255,255,.05)",
                    tickfont: { size: 11 } },
@@ -3187,23 +3329,6 @@ function cardMuroPits({ rows, summary, sub }) {
     </ul></details></div>`);
 }
 
-function zoomGapPills(card, plot) {
-  const z = el(`<div class="pills" style="padding:0 18px 12px">
-    <button class="pill active">TODO</button>
-    <button class="pill">CABEZA · 0-60s</button>
-    <button class="pill">0-180s</button></div>`);
-  card.insertBefore(z, card.querySelector(".chart-summary") || card.querySelector(".chart-guide"));
-  const set = (rango, btn) => {
-    z.querySelectorAll(".pill").forEach((p) => p.classList.remove("active"));
-    btn.classList.add("active");
-    Plotly.relayout(plot, rango ? { "yaxis.range": rango }
-                                : { "yaxis.autorange": "reversed" });
-  };
-  const [b1, b2, b3] = z.querySelectorAll("button");
-  b1.onclick = () => set(null, b1);
-  b2.onclick = () => set([60, -2], b2);
-  b3.onclick = () => set([180, -2], b3);
-}
 
 /* ───────────────────────────── vista EQUIPOS (evolución de la temporada) */
 function filtrarEquipos(raw, selSet) {
